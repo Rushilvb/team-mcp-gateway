@@ -4,7 +4,7 @@ A WooCommerce store on Kubernetes, plus a team MCP gateway: admins register MCP 
 and every team member uses all of their tools through one MCP endpoint and a chat agent.
 The same Helm charts run locally (k3d) and on a VPS (k3s); only values files differ.
 
-> Status: Phase 1 (store). Sections marked _TODO_ are filled in by later phases.
+> Status: Phase 2 (store + WooCommerce MCP server). Sections marked _TODO_ are filled in by later phases.
 
 ## Repository layout
 
@@ -38,10 +38,15 @@ make prereqs
 ```bash
 make cluster-up     # creates the k3d cluster "urumi" with ports 80/443 mapped to Traefik
 make status         # nodes + Traefik
-make deploy-local   # store chart (first run ~5 min: image pulls + WooCommerce download)
+make test           # service unit tests (run inside Docker)
+make build load-images   # build our images and import them into k3d (no registry needed)
+make deploy-local   # store + platform charts (first run ~5 min: image pulls + WooCommerce download)
 make store-admin    # WordPress admin URL + password
 make teardown       # deletes the cluster
 ```
+
+Image tags are a hash of each service's source files, so `make build load-images deploy-local`
+rolls exactly the services whose code changed.
 
 Run `make help` for all targets.
 
@@ -75,6 +80,18 @@ It is safe to re-run; `make store-logs` shows what it did.
 Data lives on two PersistentVolumeClaims (MariaDB data, WordPress `wp-content`). Deleting either
 pod (`kubectl -n store delete pod ...`) loses nothing. All passwords and the API key are generated
 by Helm on first install and kept across upgrades. Nothing secret is in git.
+
+## Testing an upstream MCP server directly (development only)
+
+The MCP servers have no Ingress: in normal use only the gateway can reach them. To poke one directly,
+port-forward it (port-forward goes through the kubelet, so NetworkPolicies don't apply):
+
+```bash
+kubectl -n platform port-forward svc/woo-mcp 8000:8000
+```
+
+Then run MCP Inspector (`npx @modelcontextprotocol/inspector@2.8.0`). Choose transport **Streamable HTTP**
+and URL `http://localhost:8000/mcp`. See [services/woo-mcp/README.md](services/woo-mcp/README.md) for the tools.
 
 ## Connecting Claude Code / Cursor / MCP Inspector
 _TODO (Phase 4/5)_

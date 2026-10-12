@@ -59,3 +59,32 @@ One entry per phase: what was built, the key concepts, and the questions an inte
    Secrets: `lookup` returns the existing values, so passwords never change. Bootstrap: every step checks first (`wp core is-installed`, plugin version, product by SKU, user exists, API key hash already present), and settings are plain "set to X" operations. No pod-restart annotations change either, so pods aren't rolled.
 3. **Why generate the API key in Helm instead of letting WooCommerce create one?**
    If WooCommerce generated it, the key would only exist inside WordPress, and the Job would need Kubernetes RBAC to write it into a Secret for the MCP server. Generating it in Helm means the Secret is the source of truth and the Job only needs DB access it already has. The trade-off is that we must match WooCommerce's storage format exactly (HMAC hash, truncated key), which we copy from `WC_Auth::create_keys()`.
+
+---
+
+## Phase 2: WooCommerce MCP server
+
+### What was built
+- `services/woo-mcp`: Python MCP server (official SDK `mcp==2.2.0`, class `MCPServer`) with 6 tools: `get_info`, `list_products`, `create_product`, `list_orders` (incl. `date="today"` in Asia/Kolkata), `get_order`, `update_order_status`. Served over Streamable HTTP at `/mcp` (stateless, JSON responses) by uvicorn, plus `/healthz`.
+- `woo_mcp/oauth.py`: a hand-written OAuth 1.0a signer matching WooCommerce's verifier. `woo_mcp/woo_client.py`: thin httpx client (signing, Host header, no redirects, timeouts, clean errors).
+- 23 unit tests (REST mocked with `respx`; tools called through a real in-memory MCP client). Run with `make test` inside a Docker build stage.
+- `charts/platform` (namespace `platform`): woo-mcp Deployment (non-root, read-only root FS, no service-account token), ClusterIP Service, **no Ingress**, a Secret copied from the store via `lookup`, and a NetworkPolicy.
+- Makefile: `test`, `build`, `load-images`, `lint`; `deploy-local` now installs both charts. Image tags are a hash of the source.
+
+### Key concepts
+- **MCP in one paragraph**: a JSON-RPC protocol between a *client* (Claude Code, Inspector, later our gateway) and a *server* that offers tools. The client calls `initialize`, then `tools/list` (names + descriptions + JSON Schemas for arguments), then `tools/call`. The tool's result is content the model reads; failures come back as results with `isError: true`, so the model can see and react to them.
+- **Streamable HTTP transport**: every MCP message is an HTTP POST to one endpoint (`/mcp`). The server may answer with JSON or upgrade to an SSE stream. We run **stateless** (no `Mcp-Session-Id` kept server-side), so restarts or extra replicas lose nothing. **JSON responses** make it plain request/response.
+- **Schemas from type hints**: `Annotated[int, Field(ge=1, le=100)]` becomes `{"type":"integer","minimum":1,"maximum":100}` in `tools/list`. The SDK validates arguments *before* our code runs (our tests prove bad input never reaches the store).
+- **DNS-rebinding protection**: the SDK checks the `Host` header. Its default only allows localhost, so in-cluster callers (`woo-mcp.platform.svc...`) would be rejected. We pass the allowed hosts explicitly.
+- **OAuth 1.0a (one-legged)**: instead of sending the secret, sign each request: HMAC-SHA256 over method + URL + sorted query params, keyed with the secret. A nonce and timestamp stop replays. WooCommerce requires it over plain HTTP (it refuses Basic auth without TLS). Quirk: WooCommerce signs its *home URL*, so we sign `http://shop.localtest.me/...` while sending to the in-cluster Service with `Host: shop.localtest.me`.
+- **Cross-namespace Secrets**: a pod can only use Secrets from its own namespace. Helm `lookup` reads `store/store-woo-api` at deploy time and creates `platform/woo-mcp-store-api`. It fails with a clear message if the store isn't deployed. A checksum annotation restarts woo-mcp if the copied key changes.
+- **NetworkPolicy**: once a policy selects a pod, all traffic not explicitly allowed is denied. woo-mcp: ingress only from pods labelled `gateway`; egress only to WordPress pods in `store` on port 80, plus DNS. DNS must be allowed explicitly, or even the store's name won't resolve. k3s *rejects* blocked connections, so they show "connection refused" rather than timing out. `kubectl port-forward` isn't affected: the kubelet connects inside the pod's own network namespace.
+- **Image tags from content hashes**: tag = hash of the service's files. Same code → same tag (Helm does nothing); changed code → new tag (Helm rolls the pod). No `latest`, no "did it pick up my change?" confusion.
+
+### Likely interview questions
+1. **Why is the MCP server internal-only, and how do you prove it?**
+   It holds a store credential that can create products and change orders. The only thing that should use it is the gateway, which adds auth, per-user attribution and audit. So: ClusterIP only, no Ingress, and a NetworkPolicy allowing ingress only from gateway pods. Proof, with controls: a random pod in `platform` is refused, while an identical pod labelled `app.kubernetes.io/name=gateway` gets `ok`. From inside woo-mcp, the store answers 200 while the internet and MariaDB are refused.
+2. **Why did you write the OAuth signing yourself instead of using a library?**
+   The tricky part isn't the HMAC, it's WooCommerce's quirks: it rebuilds the URL from its home URL, only signs query params, and has a specific encoding and key format. ~30 lines that mirror its PHP verifier are easier to explain and debug than configuring a general library around those quirks. And it's verified: the test's golden signature was accepted by WooCommerce's own `check_oauth_signature()` running in the store pod, and a wrong one was rejected.
+3. **What happens when the store is down?**
+   woo-mcp stays up and Ready: `/healthz` deliberately doesn't check the store, because restarting woo-mcp can't fix WordPress. Each tool call fails fast (10s timeout) with an MCP tool error, `store unreachable: timed out after 10s`, so the model or user sees a clear reason. The gateway (Phase 4) will keep listing woo-mcp's tools from its cache and report the call error.
