@@ -4,7 +4,7 @@ A WooCommerce store on Kubernetes, plus a team MCP gateway: admins register MCP 
 and every team member uses all of their tools through one MCP endpoint and a chat agent.
 The same Helm charts run locally (k3d) and on a VPS (k3s); only values files differ.
 
-> Status: Phase 0 (scaffold). Sections marked _TODO_ are filled in by later phases.
+> Status: Phase 1 (store). Sections marked _TODO_ are filled in by later phases.
 
 ## Repository layout
 
@@ -38,7 +38,8 @@ make prereqs
 ```bash
 make cluster-up     # creates the k3d cluster "urumi" with ports 80/443 mapped to Traefik
 make status         # nodes + Traefik
-# make build load-images deploy-local   # TODO (Phase 1+)
+make deploy-local   # store chart (first run ~5 min: image pulls + WooCommerce download)
+make store-admin    # WordPress admin URL + password
 make teardown       # deletes the cluster
 ```
 
@@ -60,7 +61,20 @@ Troubleshooting: if `make cluster-up` reports that port 80 or 443 is already all
 Windows program holds it. Find it with `netstat -ano | findstr :80` in PowerShell.
 
 ## Placing an order on the storefront
-_TODO (Phase 1)_
+
+`make deploy-local` installs the `store` chart into namespace `store`. A bootstrap Job (Helm
+post-install/upgrade hook) then installs WordPress and WooCommerce and configures the shop: INR,
+Asia/Kolkata timezone, Cash on Delivery, three sample products, and a REST API key for our MCP server.
+It is safe to re-run; `make store-logs` shows what it did.
+
+1. Open `http://shop.localtest.me`, add a product to the cart, and go to checkout.
+2. Fill in any billing details and choose **Cash on delivery**. Place the order.
+3. Run `make store-admin` to get the admin password. Log in at `http://shop.localtest.me/wp-admin`
+   and open **WooCommerce → Orders**. The order is there with status *Processing*.
+
+Data lives on two PersistentVolumeClaims (MariaDB data, WordPress `wp-content`). Deleting either
+pod (`kubectl -n store delete pod ...`) loses nothing. All passwords and the API key are generated
+by Helm on first install and kept across upgrades. Nothing secret is in git.
 
 ## Connecting Claude Code / Cursor / MCP Inspector
 _TODO (Phase 4/5)_
