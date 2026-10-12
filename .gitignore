@@ -1,0 +1,39 @@
+# ---- Secrets (never commit) ----
+.env
+.env.*
+!.env.example
+*.secret.yaml
+values-*.secret.yaml
+secrets/
+!secrets/*.example
+*.pem
+*.key
+
+# ---- Personal / brief documents ----
+*.pdf
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# ---- Node / dashboard ----
+node_modules/
+dist/
+*.tsbuildinfo
+
+# ---- Editors / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# ---- Misc ----
+*.log
+*.tgz

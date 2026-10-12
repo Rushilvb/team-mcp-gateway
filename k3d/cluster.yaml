@@ -1,0 +1,28 @@
+# k3d cluster definition for local development.
+# k3d runs k3s (a lightweight, fully conformant Kubernetes) inside Docker containers.
+# The VPS runs the same k3s version natively, so local and prod behave the same.
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: urumi
+servers: 1          # control-plane node (API server, scheduler, also runs workloads)
+agents: 1           # worker node, so pods actually spread across >1 node
+# Pin the Kubernetes version. Docker tags use '-' where k3s versions use '+'.
+# Use the same version on the VPS: INSTALL_K3S_VERSION=v1.36.5+k3s1
+image: rancher/k3s:v1.36.5-k3s1
+ports:
+  # k3d puts a small nginx "loadbalancer" container in front of the nodes.
+  # Map Windows/WSL localhost:80 and :443 to it; it forwards to Traefik,
+  # k3s's built-in ingress controller.
+  - port: 80:80
+    nodeFilters: [loadbalancer]
+  - port: 443:443
+    nodeFilters: [loadbalancer]
+options:
+  k3d:
+    wait: true                    # block until the cluster is up
+  kubeconfig:
+    updateDefaultKubeconfig: true # write credentials to ~/.kube/config
+    switchCurrentContext: true    # kubectl now talks to this cluster (context: k3d-urumi)
+# Defaults we deliberately KEEP: Traefik (ingress), local-path-provisioner
+# (PersistentVolumes on node disk), and the NetworkPolicy controller.

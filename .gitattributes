@@ -1,0 +1,5 @@
+# Force LF line endings so bash scripts and YAML work in WSL/Linux even though
+# the repo lives on a Windows drive.
+* text=auto eol=lf
+*.pdf binary
+*.png binary
