@@ -1,0 +1,6 @@
+# Production (k3s on a VPS). Filled in properly in Phase 8.
+wooMcp:
+  image:
+    repository: ghcr.io/OWNER/woo-mcp   # TODO(Phase 8)
+  store:
+    publicHost: shop.example.com        # TODO(Phase 8): must match the store chart's ingress.host

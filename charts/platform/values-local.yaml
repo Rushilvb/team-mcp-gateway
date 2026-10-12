@@ -1,0 +1,4 @@
+# Local k3d cluster.
+wooMcp:
+  store:
+    publicHost: shop.localtest.me

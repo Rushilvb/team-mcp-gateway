@@ -1,0 +1,14 @@
+# ClusterIP only, and deliberately no Ingress: this server holds store
+# credentials and is only meant to be called by the gateway.
+apiVersion: v1
+kind: Service
+metadata:
+  name: woo-mcp
+  labels: {{- include "platform.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector: {{- include "platform.selectorLabels" (dict "ctx" $ "name" "woo-mcp") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

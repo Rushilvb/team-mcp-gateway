@@ -4,7 +4,13 @@
 CLUSTER      := urumi
 CLUSTER_CFG  := k3d/cluster.yaml
 
-.PHONY: help prereqs cluster-up status teardown build load-images deploy-local store-admin store-logs deploy-prod dod-check
+# Image tag = hash of the service's source files (tracked + untracked, minus
+# gitignored). It changes exactly when the code changes, so Helm sees a new tag
+# and rolls the pod; rebuilding unchanged code gives the same tag.
+src_hash = $(shell cd services/$(1) && git ls-files -co --exclude-standard | sort | xargs sha1sum | sha1sum | cut -c1-12)
+TAG_WOO  := $(call src_hash,woo-mcp)
+
+.PHONY: help prereqs cluster-up status teardown test build load-images lint deploy-local store-admin store-logs deploy-prod dod-check
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -32,15 +38,25 @@ status: ## Show nodes and ingress controller
 teardown: ## Delete the local cluster (destroys all data in it)
 	k3d cluster delete $(CLUSTER)
 
-build: ## Build service images (Phase 2+)
-	@echo "build: implemented from Phase 2"
+test: ## Run service unit tests (inside Docker; no local Python needed)
+	docker build --target test services/woo-mcp
 
-load-images: ## Import local images into k3d (Phase 2+)
-	@echo "load-images: implemented from Phase 2"
+build: ## Build service images
+	docker build --target runtime -t urumi/woo-mcp:$(TAG_WOO) services/woo-mcp
+
+load-images: ## Import local images into the k3d cluster (no registry needed)
+	k3d image import urumi/woo-mcp:$(TAG_WOO) -c $(CLUSTER)
+
+lint: ## Lint both charts (dummy key values: lookup has no cluster during lint)
+	helm lint charts/store -f charts/store/values-local.yaml
+	helm lint charts/platform -f charts/platform/values-local.yaml \
+	  --set wooMcp.image.tag=lint --set wooMcp.store.consumerKey=x --set wooMcp.store.consumerSecret=x
 
 deploy-local: ## Install/upgrade the charts on the local cluster (values-local.yaml)
 	helm upgrade --install store charts/store -n store --create-namespace \
 	  -f charts/store/values-local.yaml --wait --timeout 15m
+	helm upgrade --install platform charts/platform -n platform --create-namespace \
+	  -f charts/platform/values-local.yaml --set wooMcp.image.tag=$(TAG_WOO) --wait --timeout 5m
 
 store-admin: ## Print the WordPress admin URL, user and password
 	@echo "URL:      http://shop.localtest.me/wp-admin"

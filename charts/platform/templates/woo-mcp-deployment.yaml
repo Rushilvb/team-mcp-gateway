@@ -1,0 +1,65 @@
+{{- $w := .Values.wooMcp }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: woo-mcp
+  labels: {{- include "platform.labels" . | nindent 4 }}
+    app.kubernetes.io/name: woo-mcp
+spec:
+  replicas: {{ $w.replicas }}
+  selector:
+    matchLabels: {{- include "platform.selectorLabels" (dict "ctx" $ "name" "woo-mcp") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "platform.labels" . | nindent 8 }}
+        app.kubernetes.io/name: woo-mcp
+      annotations:
+        # The copied key can change (store key rotated), so restart on change.
+        # Unlike the store's random secrets, this hash is stable between renders.
+        checksum/store-api: {{ include (print $.Template.BasePath "/woo-mcp-secret.yaml") . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false   # never talks to the Kubernetes API
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: woo-mcp
+          image: "{{ $w.image.repository }}:{{ required "wooMcp.image.tag is required (make deploy-local sets it)" $w.image.tag }}"
+          imagePullPolicy: {{ $w.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: WOO_BASE_URL
+              value: {{ $w.store.url | quote }}
+            - name: WOO_PUBLIC_HOST
+              value: {{ $w.store.publicHost | quote }}
+            - name: STORE_TIMEZONE
+              value: {{ $w.store.timezone | quote }}
+            - name: WOO_TIMEOUT_SECONDS
+              value: {{ $w.store.timeoutSeconds | quote }}
+            - name: WOO_CONSUMER_KEY
+              valueFrom: { secretKeyRef: { name: woo-mcp-store-api, key: consumer-key } }
+            - name: WOO_CONSUMER_SECRET
+              valueFrom: { secretKeyRef: { name: woo-mcp-store-api, key: consumer-secret } }
+            # Host headers our MCP endpoint accepts (DNS-rebinding protection):
+            # the Service's in-cluster names, plus localhost for port-forward.
+            - name: MCP_ALLOWED_HOSTS
+              value: "woo-mcp:*,woo-mcp.{{ .Release.Namespace }}:*,woo-mcp.{{ .Release.Namespace }}.svc:*,woo-mcp.{{ .Release.Namespace }}.svc.cluster.local:*,localhost:*,127.0.0.1:*"
+          # /healthz only checks this process. It does NOT call the store:
+          # restarting woo-mcp wouldn't fix a store outage, and each tool call
+          # already reports "store unreachable" clearly.
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources: {{- toYaml $w.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }

@@ -1,0 +1,39 @@
+# Firewall for woo-mcp pods (enforced by k3s's built-in NetworkPolicy controller).
+# Once a pod is selected by a policy, anything not listed here is dropped.
+# Note: `kubectl port-forward` still works for testing. It enters the pod's own
+# network namespace through the kubelet, so it isn't pod-to-pod traffic.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: woo-mcp
+  labels: {{- include "platform.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "platform.selectorLabels" (dict "ctx" $ "name" "woo-mcp") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Only the gateway (Phase 4) may call us.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gateway
+      ports:
+        - { protocol: TCP, port: 8000 }
+  egress:
+    # The store's WordPress pods, and nothing else on the network...
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.wooMcp.store.namespace }} }
+          podSelector:
+            matchLabels: { app.kubernetes.io/name: wordpress }
+      ports:
+        - { protocol: TCP, port: 80 }
+    # ...plus DNS, so we can resolve the store's Service name.
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }

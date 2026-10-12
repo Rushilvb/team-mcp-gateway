@@ -1,0 +1,6 @@
+apiVersion: v2
+name: platform
+description: Team MCP gateway, dashboard and the MCP servers it aggregates (namespace "platform").
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

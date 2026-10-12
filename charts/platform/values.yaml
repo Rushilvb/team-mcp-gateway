@@ -1,0 +1,26 @@
+# Defaults for the platform chart. Environment-specific overrides live in
+# values-local.yaml and values-prod.yaml.
+
+wooMcp:
+  image:
+    repository: urumi/woo-mcp
+    tag: ""                       # set by the Makefile (hash of the source), required
+    pullPolicy: IfNotPresent
+  replicas: 1
+  store:
+    namespace: store              # where the store chart is installed
+    # In-cluster address of the WordPress Service (plain HTTP, never leaves the cluster).
+    url: http://store-wordpress.store.svc.cluster.local
+    # Public host of the store = WordPress's site URL host. Sent as the Host
+    # header and used in the OAuth signature.
+    publicHost: shop.localtest.me
+    timezone: Asia/Kolkata
+    timeoutSeconds: 10
+    # The store chart's API key Secret, copied into this namespace by Helm.
+    apiKeySecret: store-woo-api
+    # Set both to skip the copy (e.g. a store managed elsewhere). Leave empty normally.
+    consumerKey: ""
+    consumerSecret: ""
+  resources:
+    requests: { cpu: 50m,  memory: 96Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
