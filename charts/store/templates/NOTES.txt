@@ -1,0 +1,10 @@
+Store deployed to namespace "{{ .Release.Namespace }}".
+
+  Storefront: {{ include "store.siteUrl" . }}
+  WP admin:   {{ include "store.siteUrl" . }}/wp-admin   (user: {{ .Values.wordpress.admin.user }})
+
+Admin password:
+  kubectl -n {{ .Release.Namespace }} get secret {{ .Release.Name }}-wp-admin -o jsonpath='{.data.password}' | base64 -d; echo
+
+Bootstrap logs:
+  kubectl -n {{ .Release.Namespace }} logs job/{{ .Release.Name }}-bootstrap

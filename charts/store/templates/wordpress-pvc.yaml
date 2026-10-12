@@ -1,0 +1,16 @@
+# Only wp-content is persistent (plugins, themes, uploads). WordPress core comes
+# from the image on every start, so upgrading WordPress = bumping the image tag.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-wp-content
+  labels: {{- include "store.labels" . | nindent 4 }}
+  annotations:
+    # Keep plugin files if the release is uninstalled (the DB PVC survives too).
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- include "store.storageClass" . | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ .Values.wordpress.storage }}

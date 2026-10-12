@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-wordpress
+  labels: {{- include "store.labels" . | nindent 4 }}
+    app.kubernetes.io/name: wordpress
+spec:
+  replicas: 1
+  # Recreate: stop the old pod before starting the new one. A ReadWriteOnce
+  # volume and WordPress's plugin files don't tolerate two writers.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {{- include "store.selectorLabels" (dict "ctx" $ "name" "wordpress") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "store.labels" . | nindent 8 }}
+        app.kubernetes.io/name: wordpress
+      # No checksum/secret annotations: see the note in mariadb-statefulset.yaml.
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 33           # www-data in the Debian-based image
+        runAsGroup: 33
+        fsGroup: 33
+        sysctls:
+          # Let a non-root process bind port 80. This sysctl is namespaced to
+          # the pod and on Kubernetes' "safe" list, so no cluster change needed.
+          - name: net.ipv4.ip_unprivileged_port_start
+            value: "0"
+      {{- if .Values.volumePermissions.enabled }}
+      initContainers:
+        # local-path volumes are plain host directories owned by root, and
+        # Kubernetes' fsGroup does not apply to them. The image's entrypoint
+        # (running as uid 33) then fails to chmod wp-content and crash-loops.
+        # This hands the volume to www-data. It runs as root but with only the
+        # CHOWN capability, and only changes the top directory (all later
+        # writers are uid 33). Disable on storage that honours fsGroup.
+        - name: volume-permissions
+          image: "{{ .Values.images.wordpress.repository }}:{{ .Values.images.wordpress.tag }}"
+          imagePullPolicy: {{ .Values.images.wordpress.pullPolicy }}
+          command: ["chown", "33:33", "/var/www/html/wp-content"]
+          volumeMounts:
+            - name: wp-content
+              mountPath: /var/www/html/wp-content
+          resources: {{- toYaml .Values.bootstrap.resources | nindent 12 }}
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"], add: ["CHOWN"] }
+      {{- end }}
+      containers:
+        - name: wordpress
+          image: "{{ .Values.images.wordpress.repository }}:{{ .Values.images.wordpress.tag }}"
+          imagePullPolicy: {{ .Values.images.wordpress.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            # The image's entrypoint writes wp-config.php from wp-config-docker.php,
+            # which reads these env vars at runtime.
+            - name: WORDPRESS_DB_HOST
+              value: {{ .Release.Name }}-mariadb
+            - name: WORDPRESS_DB_NAME
+              value: {{ .Values.mariadb.database | quote }}
+            - name: WORDPRESS_DB_USER
+              value: {{ .Values.mariadb.user | quote }}
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Release.Name }}-db, key: password } }
+          envFrom:
+            - secretRef: { name: {{ .Release.Name }}-wp-salts }
+          volumeMounts:
+            - name: wp-content
+              mountPath: /var/www/html/wp-content
+          # Readiness hits PHP + DB: wp-login.php returns 500 if the DB is down,
+          # so the pod is pulled out of the Service until the DB is back.
+          # (302 to install.php before bootstrap still counts as ready.)
+          readinessProbe:
+            httpGet: { path: /wp-login.php, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Liveness only checks Apache answers. We deliberately do NOT restart
+          # WordPress because the DB is down; restarting wouldn't fix that.
+          livenessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 3
+          resources: {{- toYaml .Values.wordpress.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+      volumes:
+        - name: wp-content
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-wp-content

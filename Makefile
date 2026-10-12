@@ -4,7 +4,7 @@
 CLUSTER      := urumi
 CLUSTER_CFG  := k3d/cluster.yaml
 
-.PHONY: help prereqs cluster-up status teardown build load-images deploy-local deploy-prod dod-check
+.PHONY: help prereqs cluster-up status teardown build load-images deploy-local store-admin store-logs deploy-prod dod-check
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -38,8 +38,17 @@ build: ## Build service images (Phase 2+)
 load-images: ## Import local images into k3d (Phase 2+)
 	@echo "load-images: implemented from Phase 2"
 
-deploy-local: ## helm upgrade --install charts with values-local.yaml (Phase 1+)
-	@echo "deploy-local: implemented from Phase 1"
+deploy-local: ## Install/upgrade the charts on the local cluster (values-local.yaml)
+	helm upgrade --install store charts/store -n store --create-namespace \
+	  -f charts/store/values-local.yaml --wait --timeout 15m
+
+store-admin: ## Print the WordPress admin URL, user and password
+	@echo "URL:      http://shop.localtest.me/wp-admin"
+	@echo "User:     $$(kubectl -n store get secret store-wp-admin -o jsonpath='{.data.username}' | base64 -d)"
+	@echo "Password: $$(kubectl -n store get secret store-wp-admin -o jsonpath='{.data.password}' | base64 -d)"
+
+store-logs: ## Show the store bootstrap Job logs
+	kubectl -n store logs job/store-bootstrap --all-containers
 
 deploy-prod: ## helm upgrade --install charts with values-prod.yaml (Phase 8)
 	@echo "deploy-prod: implemented in Phase 8"

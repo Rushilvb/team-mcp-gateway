@@ -1,0 +1,88 @@
+# Defaults for the store chart. Environment-specific overrides live in
+# values-local.yaml and values-prod.yaml.
+
+images:
+  wordpress:
+    repository: wordpress
+    tag: 7.1.3-php8.3-apache      # Debian based; www-data = uid 33
+    pullPolicy: IfNotPresent
+  wpcli:
+    repository: wordpress
+    tag: cli-2.12.0-php8.3        # Alpine based; we run it as uid 33 to match the site files
+    pullPolicy: IfNotPresent
+  mariadb:
+    repository: mariadb
+    tag: "11.8.9"                 # LTS line
+    pullPolicy: IfNotPresent
+
+# "" = use the cluster's default StorageClass.
+storageClass: ""
+
+# Run a tiny root init container (CHOWN capability only) that gives the
+# wp-content volume to www-data. Needed for k3s local-path, which ignores fsGroup.
+volumePermissions:
+  enabled: true
+
+ingress:
+  className: traefik
+  host: shop.localtest.me
+  annotations: {}
+  tls:
+    enabled: false
+    secretName: ""                # e.g. issued by cert-manager in prod
+
+mariadb:
+  database: wordpress
+  user: wordpress
+  # Leave empty to have Helm generate them (and keep them across upgrades).
+  rootPassword: ""
+  password: ""
+  storage: 2Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: "1",  memory: 768Mi }
+
+wordpress:
+  siteTitle: Urumi Demo Store
+  admin:
+    user: admin
+    email: admin@example.com
+    password: ""                  # empty = generate
+  storage: 2Gi                    # PVC for wp-content (plugins, uploads)
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: "1",  memory: 768Mi }
+
+woocommerce:
+  version: 11.2.1
+  currency: INR
+  country: "IN:KA"                # country:state
+  timezone: Asia/Kolkata
+  # Dedicated low-privilege WP user that owns the REST API key (role shop_manager).
+  apiUser:
+    login: woo-mcp
+    email: woo-mcp@example.com
+  # Leave empty to generate (ck_/cs_ + 40 hex chars, same shape WooCommerce uses).
+  apiKey:
+    consumerKey: ""
+    consumerSecret: ""
+  sampleProducts:
+    - sku: CHAI-001
+      name: Masala Chai Tin
+      price: "349"
+      description: 250g of strong Assam masala chai.
+    - sku: TOTE-001
+      name: Handloom Cotton Tote
+      price: "799"
+      description: Hand-woven cotton tote bag.
+    - sku: DIYA-001
+      name: Brass Diya
+      price: "1299"
+      description: Traditional polished brass oil lamp.
+
+bootstrap:
+  backoffLimit: 3
+  activeDeadlineSeconds: 900
+  resources:
+    requests: { cpu: 50m,  memory: 128Mi }
+    limits:   { cpu: 500m, memory: 512Mi }

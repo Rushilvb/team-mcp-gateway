@@ -1,0 +1,4 @@
+# Local k3d cluster.
+storageClass: local-path          # k3s's built-in provisioner
+ingress:
+  host: shop.localtest.me         # *.localtest.me resolves to 127.0.0.1

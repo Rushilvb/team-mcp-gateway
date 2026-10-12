@@ -1,0 +1,17 @@
+# The bootstrap script lives in files/ as a plain shell script (easy to read and
+# lint); only the product list is generated from values.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-bootstrap
+  labels: {{- include "store.labels" . | nindent 4 }}
+data:
+  bootstrap.sh: |-
+{{ .Files.Get "files/bootstrap.sh" | indent 4 }}
+  api-key.php: |-
+{{ .Files.Get "files/api-key.php" | indent 4 }}
+  # One product per line: sku|price|name|description
+  products.txt: |
+    {{- range .Values.woocommerce.sampleProducts }}
+    {{ .sku }}|{{ .price }}|{{ .name }}|{{ .description }}
+    {{- end }}

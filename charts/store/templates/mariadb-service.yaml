@@ -1,0 +1,15 @@
+# Headless Service (clusterIP: None): DNS returns the pod IP directly.
+# A StatefulSet requires one to give its pods stable DNS names
+# (store-mariadb-0.store-mariadb). WordPress connects to "store-mariadb".
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-mariadb
+  labels: {{- include "store.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector: {{- include "store.selectorLabels" (dict "ctx" $ "name" "mariadb") | nindent 4 }}
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql

@@ -1,0 +1,11 @@
+# Production (k3s on a VPS). Filled in properly in Phase 8.
+# Secrets are NOT set here: pass them with --set or a gitignored values-prod.secret.yaml.
+storageClass: local-path          # TODO(Phase 8): confirm for the VPS
+ingress:
+  host: shop.example.com          # TODO(Phase 8): real domain
+  tls:
+    enabled: false                # TODO(Phase 8): true + secretName with cert-manager
+mariadb:
+  storage: 5Gi
+wordpress:
+  storage: 5Gi

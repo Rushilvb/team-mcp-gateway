@@ -1,0 +1,6 @@
+apiVersion: v2
+name: store
+description: WordPress + WooCommerce + MariaDB, built from official images with our own templates.
+type: application
+version: 0.1.0
+appVersion: "7.1.3"
