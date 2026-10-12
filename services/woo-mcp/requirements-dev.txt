@@ -1,0 +1,4 @@
+# Async tests use anyio's pytest plugin (anyio ships with mcp). It runs async
+# fixtures and tests in the same task, which the MCP client's task group needs.
+pytest==9.1.1
+respx==0.23.1    # mocks httpx, so tests never hit a real store
