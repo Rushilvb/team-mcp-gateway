@@ -4,7 +4,7 @@ A WooCommerce store on Kubernetes, plus a team MCP gateway: admins register MCP 
 and every team member uses all of their tools through one MCP endpoint and a chat agent.
 The same Helm charts run locally (k3d) and on a VPS (k3s); only values files differ.
 
-> Status: Phase 3 (store + woo/notes/fx MCP servers + Postgres). Sections marked _TODO_ are filled in by later phases.
+> Status: Phase 4 (store, MCP servers, gateway core at http://app.localtest.me/mcp). Sections marked _TODO_ are filled in by later phases.
 
 ## Repository layout
 
@@ -103,7 +103,28 @@ notes-mcp and fx-mcp require a credential. `make mcp-tokens` prints both. Add it
 Without the header, both answer `401`. In normal use only the gateway holds these credentials.
 
 ## Connecting Claude Code / Cursor / MCP Inspector
-_TODO (Phase 4/5)_
+
+All you need is the gateway URL, `http://app.localtest.me/mcp`, and **your own API key**. Until the
+dashboard exists (Phase 5), keys are created with the gateway CLI:
+
+```bash
+make gateway-user EMAIL=b@example.com     # once per team member
+make gateway-key EMAIL=b@example.com      # prints urk_... once
+```
+
+Tools appear as `<server>__<tool>`, e.g. `woo__list_orders`, `notes__add_note`, `fx__convert_currency`.
+
+- **MCP Inspector**: `npx @modelcontextprotocol/inspector@2.8.0` → transport *Streamable HTTP*, URL above,
+  custom header `Authorization: Bearer urk_...`.
+- **Claude Code**: `claude mcp add --transport http team-gateway http://app.localtest.me/mcp --header "Authorization: Bearer urk_..."`
+- **Cursor** (`~/.cursor/mcp.json`):
+  ```json
+  { "mcpServers": { "team-gateway": { "url": "http://app.localtest.me/mcp",
+                                      "headers": { "Authorization": "Bearer urk_..." } } } }
+  ```
+
+Revoking a key (`make gateway-revoke PREFIX=urk_xxxxxxxx`) takes effect on the next request. Every call is
+recorded in the audit log (`make gateway-audit`). Details: [services/gateway/README.md](services/gateway/README.md).
 
 ## Using the chat agent
 _TODO (Phase 6)_

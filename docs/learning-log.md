@@ -120,3 +120,42 @@ One entry per phase: what was built, the key concepts, and the questions an inte
    Blast radius. If notes-mcp were compromised, the attacker gets a role that owns only the `notes` database. It can't connect to `gateway` (users, API-key hashes, encrypted upstream credentials) and can't create roles. Combined with one Secret per consumer, no pod ever holds a password it doesn't need.
 3. **What happens to notes when Postgres restarts?**
    Data is on the PVC, so it survives (verified: deleted `postgres-0`, the note was still there). While Postgres is down, notes tool calls return `notes database unavailable`. After it comes back, the asyncpg pool replaces dead connections and calls work again without restarting notes-mcp. If notes-mcp itself starts while Postgres is down, it waits up to 60s, then exits, and Kubernetes restarts it.
+
+---
+
+## Phase 4: Gateway core
+
+### What was built
+- `services/gateway`: FastAPI app hosting one MCP endpoint, `/mcp`, built on the MCP SDK's **low-level** `Server` so the tool list is computed per request.
+- **Auth**: a pure-ASGI wrapper. `Authorization: Bearer urk_…` is SHA-256-hashed and looked up on every request. Revoked keys get 401, plus a `denied` audit row naming the user and tool.
+- **Registry**:
+  - One HTTP pool per upstream, carrying that upstream's credential. Created lazily, rebuilt after failures, SSRF-checked on every (re)build.
+  - A concurrent health loop every 15s, with a tool cache and status (`connected` / `unreachable` / `disabled`).
+  - Tool calls with a 15s timeout.
+- **Naming** `<slug>__<tool>`; `list_changed` notifications via the SDK's subscription bus.
+- **Postgres schema** via Alembic (`users`, `api_keys`, `upstream_servers`, `audit_log`). An initContainer runs the migration.
+- **Bootstrap** from Secrets and values: an admin user, plus woo, notes and fx with their credentials **encrypted with Fernet**.
+- **SSRF guard**, an admin **CLI** (`make gateway-user/key/revoke/upstreams/audit`), and an **Ingress** at `app.localtest.me/mcp`.
+- **NetworkPolicy**: in only from Traefik. Out only to Postgres, our MCP servers, DNS, and public internet on 80/443 (private and link-local ranges excluded).
+- **Tests**: 50, against real Postgres and HTTP, with fake upstreams (no-auth, bearer, slow header, dead) covering every CLAUDE.md requirement.
+
+### Key concepts
+- **Aggregation = MCP client + MCP server in one process.** Towards clients the gateway is an MCP *server*; towards woo, notes and fx it is an MCP *client*. `tools/list` merges what it learned as a client; `tools/call` forwards as a client.
+- **Low-level vs high-level SDK**: `MCPServer` (`@tool` decorators) suits a fixed set of tools defined in code. The gateway's tools change at runtime, so it registers `on_list_tools`/`on_call_tool` handlers on the low-level `Server` and builds `Tool` objects itself.
+- **Knowing the user inside an MCP handler**: our auth wrapper stores the `Principal` in the ASGI `scope["state"]`. The SDK exposes the HTTP request as `ctx.request`, so the handler reads `ctx.request.state.principal`. (Verified for both protocol eras before building on it.)
+- **Per-user identity vs shared upstream credential**: members authenticate *to the gateway*. The gateway authenticates *to upstreams* with one shared credential per upstream, which members never see. So upstreams can't tell members apart, and attribution comes from the gateway's audit log.
+- **Cache-based listing**: `tools/list` reads a cache filled by the health loop. Listing never waits on an upstream, so a dead upstream can't slow it or break it. The cost is staleness of up to one interval, which is why `list_changed` exists.
+- **Timeouts with anyio**: `with anyio.fail_after(15): await call()` cancels the call if it overruns. We turn that into a clear tool error and audit it as `timeout`. Concurrency for health checks uses an anyio task group, so each upstream is checked in parallel with its own timeout.
+- **The 2026-07-28 MCP protocol**: requests are self-contained (no initialize handshake or session), which is why "one long-lived session per upstream" became "one HTTP pool per upstream, stateless calls over it". Server→client events need an explicit `subscriptions/listen` stream, so older clients just re-list.
+- **API key vs password hashing**: a 256-bit random key can't be guessed or dictionary-attacked, so a fast SHA-256 is enough (and keeps per-request lookup cheap). Passwords are low-entropy, so they need slow, salted argon2id.
+- **Fernet**: symmetric authenticated encryption (AES-128-CBC + HMAC-SHA256). The key lives in a Kubernetes Secret, not in the DB, so a DB dump alone doesn't expose upstream credentials.
+- **SSRF**: if admins can make the server fetch URLs, an attacker-admin (or a typo) could point it at `169.254.169.254`, `localhost`, or internal services. We validate the scheme and host, allow cluster names only from an allowlist, and check *every resolved IP*. We re-check on each reconnect (DNS rebinding) and back it with a NetworkPolicy.
+- **Alembic**: versioned schema changes. The initContainer runs `upgrade head` before the app starts, and `alembic check` in tests fails if the models drift from the migrations. A naming convention gives constraints stable names, so future migrations can reference them.
+
+### Likely interview questions
+1. **Walk me through a `tools/call` for `notes__add_note`.**
+   Traefik routes `app.localtest.me/mcp` to the gateway. `McpAuth` hashes the bearer key, finds an active key and user, and stores the Principal. The SDK parses JSON-RPC and calls our `call_tool`. We split `notes__add_note` into `notes` + `add_note` and check notes is enabled. We send `add_note` over notes' HTTP pool, which carries `Authorization: Bearer <notes token>` (decrypted from the DB), never the member's key, with a 15s timeout. We pass the result back unchanged and write an audit row: user, channel `api`, `notes`, tool, start time, duration, outcome.
+2. **What happens when an upstream dies mid-demo?**
+   Within one health interval its check fails (connection refused or timeout). Status becomes `unreachable` with the error stored, and its tools drop out of the cache. So `tools/list` from any client no longer shows them, and modern clients get `list_changed`. Other upstreams are unaffected because checks run concurrently, each with its own timeout. A direct call to its tool returns a clear `upstream 'fx' is unreachable: …` error and is audited. When it comes back, the next check restores it. (Verified by scaling fx-mcp to 0 and back.)
+3. **How do you guarantee members never see upstream credentials, and upstreams never see member keys?**
+   Credentials are Fernet-encrypted in the DB, decrypted only in memory into the upstream's own HTTP pool headers, and never serialized into any response (a future REST API returns only "credential set: yes/no"). Error messages are scrubbed of the credential as defense in depth. Member keys are consumed by `McpAuth` and never copied onto upstream requests, because upstream pools are built from upstream config only. Tests assert both directions: fake upstreams record every header they receive (their own credential, never `urk_…`), and every response and error body is scanned for the secrets.
