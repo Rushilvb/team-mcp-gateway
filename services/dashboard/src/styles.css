@@ -1,0 +1,41 @@
+/* Pico CSS styles plain HTML; these are the few additions it doesn't cover. */
+
+:root { --pico-font-size: 95%; }
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.55rem;
+  border-radius: 1rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.badge-connected, .badge-active, .badge-success { background: #d1f2df; color: #0f5132; }
+.badge-unreachable, .badge-error, .badge-timeout { background: #f8d7da; color: #842029; }
+.badge-disabled, .badge-denied, .badge-unknown { background: #e2e3e5; color: #41464b; }
+.badge-invited { background: #fff3cd; color: #664d03; }
+
+.error { color: #b02a37; }
+.muted { color: var(--pico-muted-color); }
+
+.server-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.server-header h3 { margin: 0; }
+.actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.actions button { width: auto; margin: 0; padding: 0.35rem 0.8rem; font-size: 0.85rem; }
+
+.tools { margin: 0; padding-left: 1.2rem; }
+.tools code { font-weight: 600; }
+
+.copybox input { font-family: var(--pico-font-family-monospace); }
+.codeblock { position: relative; }
+.codeblock button { position: absolute; top: 0.4rem; right: 0.4rem; width: auto; padding: 0.2rem 0.6rem; font-size: 0.8rem; }
+.codeblock pre { padding-right: 5rem; white-space: pre-wrap; word-break: break-all; }
+
+.key-once { border-left: 4px solid #198754; }
+
+table td, table th { font-size: 0.88rem; vertical-align: top; }
+.filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 0.6rem; align-items: end; }
+.pager { display: flex; gap: 1rem; align-items: center; }
+.pager button { width: auto; }
+
+.narrow { max-width: 28rem; }
