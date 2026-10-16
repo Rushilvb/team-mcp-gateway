@@ -60,6 +60,11 @@ spec:
               valueFrom: { secretKeyRef: { name: gateway-admin, key: email } }
             - name: GATEWAY_ADMIN_PASSWORD
               valueFrom: { secretKeyRef: { name: gateway-admin, key: password } }
+            # Base of invite links, and the only Origin allowed for state-changing /api calls (CSRF).
+            - name: PUBLIC_URL
+              value: {{ printf "%s://%s" (ternary "https" "http" $g.ingress.tls.enabled) $g.publicHost | quote }}
+            - name: COOKIE_SECURE
+              value: {{ $g.cookieSecure | quote }}
             - name: CALL_TIMEOUT_SECONDS
               value: {{ $g.callTimeoutSeconds | quote }}
             - name: HEALTH_INTERVAL_SECONDS

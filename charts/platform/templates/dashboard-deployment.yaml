@@ -1,0 +1,49 @@
+{{- $d := .Values.dashboard }}
+# Static React app served by nginx. No secrets, no backend access of its own:
+# the browser calls /api directly (same origin, via the Ingress).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+  labels: {{- include "platform.labels" . | nindent 4 }}
+    app.kubernetes.io/name: dashboard
+spec:
+  replicas: {{ $d.replicas }}
+  selector:
+    matchLabels: {{- include "platform.selectorLabels" (dict "ctx" $ "name" "dashboard") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "platform.labels" . | nindent 8 }}
+        app.kubernetes.io/name: dashboard
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101            # "nginx" user in the nginx-unprivileged image
+        runAsGroup: 101
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: nginx
+          image: "{{ $d.image.repository }}:{{ required "dashboard.image.tag is required (make deploy-local sets it)" $d.image.tag }}"
+          imagePullPolicy: {{ $d.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            # Root filesystem is read-only; nginx writes its pid and temp files to /tmp.
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+          resources: {{- toYaml $d.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: tmp
+          emptyDir: {}

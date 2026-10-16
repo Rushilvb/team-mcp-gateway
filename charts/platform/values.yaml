@@ -87,6 +87,8 @@ gateway:
   # Bootstrap admin, created on first start if missing. Empty password = generate.
   adminEmail: admin@example.com
   adminPassword: ""
+  # Session cookie only over HTTPS. Must be true in prod (TLS), false for local http.
+  cookieSecure: false
   callTimeoutSeconds: 15
   healthIntervalSeconds: 15
   healthTimeoutSeconds: 5
@@ -113,3 +115,13 @@ gateway:
   resources:
     requests: { cpu: 100m, memory: 192Mi }
     limits:   { cpu: "1",  memory: 512Mi }
+
+dashboard:
+  image:
+    repository: urumi/dashboard
+    tag: ""                       # set by the Makefile, required
+    pullPolicy: IfNotPresent
+  replicas: 1
+  resources:
+    requests: { cpu: 10m,  memory: 16Mi }
+    limits:   { cpu: 200m, memory: 64Mi }

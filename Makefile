@@ -7,16 +7,19 @@ CLUSTER_CFG  := k3d/cluster.yaml
 # Image tag = hash of the service's source files (tracked + untracked, minus
 # gitignored). It changes exactly when the code changes, so Helm sees a new tag
 # and rolls the pod; rebuilding unchanged code gives the same tag.
-tag = $(shell cd services/$(1) && git ls-files -co --exclude-standard | sort | xargs sha1sum | sha1sum | cut -c1-12)
+# (2>/dev/null: files deleted but not yet committed are listed by git but don't exist.)
+tag = $(shell cd services/$(1) && git ls-files -co --exclude-standard | sort | xargs sha1sum 2>/dev/null | sha1sum | cut -c1-12)
 
-PY_SERVICES := woo-mcp notes-mcp fx-mcp gateway
-IMAGES      := $(foreach s,$(PY_SERVICES),urumi/$(s):$(call tag,$(s)))
+# Every service has a Dockerfile with `test` and `runtime` stages, so they all
+# build, test and load the same way (the dashboard's test stage type-checks).
+SERVICES    := woo-mcp notes-mcp fx-mcp gateway dashboard
+IMAGES      := $(foreach s,$(SERVICES),urumi/$(s):$(call tag,$(s)))
 
-# Throwaway Postgres for tests that need a real database (notes-mcp).
+# Throwaway Postgres for tests that need a real database (notes-mcp, gateway).
 TEST_NET := urumi-test
 TEST_PG  := urumi-test-pg
 
-.PHONY: help prereqs cluster-up status teardown test build load-images lint deploy-local store-admin store-logs mcp-tokens gateway-admin gateway-user gateway-key gateway-keys gateway-revoke gateway-upstreams gateway-audit deploy-prod dod-check
+.PHONY: help prereqs cluster-up status teardown test build load-images lint deploy-local store-admin store-logs mcp-tokens gateway-admin gateway-user gateway-key gateway-keys gateway-revoke gateway-upstreams gateway-audit api-role-check deploy-prod dod-check
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -44,11 +47,11 @@ status: ## Show nodes and ingress controller
 teardown: ## Delete the local cluster (destroys all data in it)
 	k3d cluster delete $(CLUSTER)
 
-test: ## Run service tests in Docker (starts a throwaway Postgres for notes-mcp)
+test: ## Run all service tests in Docker (with a throwaway Postgres)
 	docker network create $(TEST_NET) >/dev/null 2>&1 || true
 	docker rm -f $(TEST_PG) >/dev/null 2>&1 || true
 	docker run -d --rm --name $(TEST_PG) --network $(TEST_NET) -e POSTGRES_PASSWORD=test postgres:18.4 >/dev/null
-	@status=0; for s in $(PY_SERVICES); do \
+	@status=0; for s in $(SERVICES); do \
 	  echo "=== $$s"; \
 	  docker build -q --target test -t urumi/$$s:test services/$$s >/dev/null && \
 	  docker run --rm --network $(TEST_NET) \
@@ -56,7 +59,7 @@ test: ## Run service tests in Docker (starts a throwaway Postgres for notes-mcp)
 	done; docker rm -f $(TEST_PG) >/dev/null; exit $$status
 
 build: ## Build service images (tag = hash of each service's source)
-	$(foreach s,$(PY_SERVICES),docker build --target runtime -t urumi/$(s):$(call tag,$(s)) services/$(s) && ) true
+	$(foreach s,$(SERVICES),docker build --target runtime -t urumi/$(s):$(call tag,$(s)) services/$(s) && ) true
 
 load-images: ## Import local images into the k3d cluster (no registry needed)
 	k3d image import $(IMAGES) -c $(CLUSTER)
@@ -64,7 +67,7 @@ load-images: ## Import local images into the k3d cluster (no registry needed)
 lint: ## Lint both charts (dummy key values: lookup has no cluster during lint)
 	helm lint charts/store -f charts/store/values-local.yaml
 	helm lint charts/platform -f charts/platform/values-local.yaml \
-	  --set wooMcp.image.tag=lint --set notesMcp.image.tag=lint --set fxMcp.image.tag=lint --set gateway.image.tag=lint \
+	  --set wooMcp.image.tag=lint --set notesMcp.image.tag=lint --set fxMcp.image.tag=lint --set gateway.image.tag=lint --set dashboard.image.tag=lint \
 	  --set wooMcp.store.consumerKey=x --set wooMcp.store.consumerSecret=x
 
 deploy-local: ## Install/upgrade the charts on the local cluster (values-local.yaml)
@@ -76,6 +79,7 @@ deploy-local: ## Install/upgrade the charts on the local cluster (values-local.y
 	  --set notesMcp.image.tag=$(call tag,notes-mcp) \
 	  --set fxMcp.image.tag=$(call tag,fx-mcp) \
 	  --set gateway.image.tag=$(call tag,gateway) \
+	  --set dashboard.image.tag=$(call tag,dashboard) \
 	  --wait --timeout 5m
 
 store-admin: ## Print the WordPress admin URL, user and password
@@ -90,7 +94,7 @@ mcp-tokens: ## Print the notes/fx upstream credentials (for testing with MCP Ins
 	@echo "notes-mcp  Authorization: Bearer $$(kubectl -n platform get secret notes-mcp-auth -o jsonpath='{.data.token}' | base64 -d)"
 	@echo "fx-mcp     X-API-Key: $$(kubectl -n platform get secret fx-mcp-auth -o jsonpath='{.data.api-key}' | base64 -d)"
 
-# --- Gateway admin CLI (until the dashboard exists). Usage examples:
+# --- Gateway admin CLI (handy for scripts; the dashboard does the same). Usage examples:
 #   make gateway-user EMAIL=b@example.com [ROLE=member]
 #   make gateway-key EMAIL=b@example.com
 #   make gateway-revoke PREFIX=urk_Ab3dE6gH
@@ -118,6 +122,9 @@ gateway-upstreams: ## Show upstream servers and their status
 
 gateway-audit: ## Show the latest audit log entries
 	$(GW_CLI) audit --limit 30
+
+api-role-check: ## Prove via the real API (through the Ingress) that members are refused admin actions
+	bash scripts/api-role-check.sh
 
 deploy-prod: ## helm upgrade --install charts with values-prod.yaml (Phase 8)
 	@echo "deploy-prod: implemented in Phase 8"

@@ -1,10 +1,12 @@
 {{- $g := .Values.gateway }}
-# Public entry point app.<domain>: /mcp (MCP endpoint) and /api (REST, Phase 5)
-# go to the gateway. "/" will go to the dashboard (Phase 5).
+# Public entry point app.<domain>. Traefik picks the longest matching prefix:
+#   /mcp, /api -> gateway        / (everything else) -> dashboard
+# One host for the UI and the API = same origin: the session cookie just works
+# and no CORS is needed.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: gateway
+  name: app
   labels: {{- include "platform.labels" . | nindent 4 }}
   {{- with $g.ingress.annotations }}
   annotations: {{- toYaml . | nindent 4 }}
@@ -26,3 +28,6 @@ spec:
           - path: /api
             pathType: Prefix
             backend: { service: { name: gateway, port: { name: http } } }
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: dashboard, port: { name: http } } }
