@@ -1,0 +1,4 @@
+# Runtime dependencies (pinned; each release is at least two weeks old).
+mcp==2.2.0
+uvicorn==0.54.0
+asyncpg==0.31.0

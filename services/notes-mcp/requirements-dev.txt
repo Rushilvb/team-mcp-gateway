@@ -1,0 +1,3 @@
+# Async tests use anyio's pytest plugin (anyio ships with mcp).
+pytest==9.1.1
+httpx==0.28.1    # ASGI test client for the auth middleware
