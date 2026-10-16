@@ -3,7 +3,7 @@
 One MCP endpoint (`/mcp`, Streamable HTTP) that exposes the tools of every registered upstream MCP server.
 Each team member authenticates with **their own API key**. The gateway calls each upstream with **that
 upstream's own credential**, applies timeouts, isolates failures, and writes an audit row for every tool call.
-The REST API for the dashboard (`/api`) arrives in Phase 5, and the chat agent in Phase 6.
+It also serves the REST API for the dashboard (`/api`, see below). The chat agent arrives in Phase 6.
 
 ```
 client (Claude Code / Cursor / Inspector)            gateway (namespace platform)                   upstreams
@@ -77,20 +77,52 @@ Runs when an upstream is registered and before every new connection:
 
 The gateway's NetworkPolicy adds a second layer: internet egress is allowed, but private ranges and link-local are excluded.
 
+## REST API (`/api`, for the dashboard)
+FastAPI routers in `gateway/api/`. Request and response shapes live in `api/schemas.py`. Those Pydantic models decide
+exactly which fields leave the server, so no hash or credential ever does.
+
+| Endpoint | Who |
+|---|---|
+| `POST /api/auth/login` · `POST /api/auth/logout` · `GET /api/auth/me` | anyone / logged in |
+| `GET /api/invites/{token}` · `POST /api/invites/{token}/accept` | holder of the invite link |
+| `GET/POST /api/users` · `PATCH /api/users/{id}` · `POST /api/users/{id}/invite` · `GET /api/users/{id}/keys` | admin |
+| `GET/POST /api/me/keys` · `DELETE /api/keys/{id}` (own; admins: any) | logged in |
+| `GET /api/servers` | logged in (read-only) |
+| `POST /api/servers` · `PATCH/DELETE /api/servers/{slug}` · `POST /api/servers/{slug}/test` | admin |
+| `GET /api/audit` (filters + pagination; members are forced to their own rows) | logged in |
+
+- **Sessions:**
+  - Login creates a random token. The browser keeps it in an `httpOnly; SameSite=Strict` cookie (`Secure` in prod); the DB keeps only its SHA-256 (`user_sessions`, migration `0002`), and sessions expire after 12h.
+  - The user is re-read on every request, so logout, disabling and role changes apply immediately.
+- **Login hardening:**
+  - The same error for a wrong password and an unknown email.
+  - Unknown emails still run one argon2 check against a dummy hash, so timing doesn't reveal accounts.
+  - 5 failures per email per 15 min → 429.
+- **CSRF:** `SameSite=Strict`, plus every POST/PATCH/DELETE that carries an `Origin` header must match `PUBLIC_URL`.
+- **Roles:** enforced by FastAPI dependencies (`deps.current_user`, `deps.require_admin`).
+  - Members only manage their own keys and see their own audit rows; another user's key ID answers 404, not 403.
+  - The last active admin can't be demoted or disabled.
+- **Invites:** a one-time link (random token, SHA-256 stored, 7 days, single use). Accepting sets an argon2 password and logs in.
+- **Servers:**
+  - Credentials are write-only (`credential_set: true/false`; on edit, omitted = keep, `null` = clear).
+  - The slug is immutable.
+  - URLs go through the SSRF guard.
+  - Every change awaits `registry.refresh()` before responding, so tools appear or disappear for every client immediately. A lock keeps that from interleaving with the health loop.
+- **Proof:** `make api-role-check` logs in as a throwaway member through the real Ingress and asserts 403 on every admin endpoint. `tests/test_api.py` covers the same and more.
+
 ## Requirements for later phases (recorded so they aren't forgotten)
-- **Phase 5:** every admin action that **enables, disables, edits or removes** an upstream must call
-  `registry.refresh()` right after the DB commit. Then tools appear or disappear (and `list_changed` fires)
-  immediately, instead of up to one health interval later.
+- **Phase 5 (done):** enable/disable/edit/remove refresh the tool cache before the API responds. Tested with a
+  60s health interval, and verified live: fx tools gone 0.06s after disabling.
 - **Phase 6:** the chat agent calls the gateway's own MCP endpoint at **`http://127.0.0.1:8000/mcp`**,
   which is the same pod over loopback.
   - `127.0.0.1:*` and `localhost:*` are already in `MCP_ALLOWED_HOSTS` (verified live: HTTP 200).
   - The Service name `gateway.platform.svc.cluster.local` is deliberately unusable from inside the pod, because the gateway's NetworkPolicy only admits Traefik (verified: connection refused).
 
-## Data model (Alembic migration `0001_initial`)
+## Data model (Alembic migrations `0001_initial`, `0002_sessions_invites`)
 - **Tables:** `users`, `api_keys`, `upstream_servers` and `audit_log`, as specified in CLAUDE.md, with CHECK constraints for the enum-like columns.
 - **Migrations:** an initContainer runs `alembic upgrade head` before the app starts. A test (`alembic check`) fails if the models and migrations drift apart.
 
-## Operating (until the dashboard exists)
+## Operating from the command line (the dashboard does the same)
 ```bash
 make gateway-admin                      # bootstrap admin email + password
 make gateway-user EMAIL=b@example.com   # ROLE=admin for admins
@@ -101,7 +133,7 @@ make gateway-audit                      # latest audit rows
 ```
 
 ## Tests
-`make test` runs 53 gateway tests against a real Postgres. They use small fake upstream MCP servers on
+`make test` runs 75 gateway tests (MCP + REST API) against a real Postgres. They use small fake upstream MCP servers on
 localhost (no-auth, bearer, slow header, session-based legacy, and dead), the real gateway over HTTP, and a
 real MCP client. Coverage includes prefixing/routing, collisions, legacy-protocol upstreams, timeouts, dead and dying upstreams,
 disabling, bootstrap-once, `list_changed`, Host-header protection, revoked keys, audit attribution, credentials never leaking, the SSRF rules, and

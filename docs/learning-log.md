@@ -172,3 +172,47 @@ One entry per phase: what was built, the key concepts, and the questions an inte
 - **Recorded for Phase 5.** Admin enable/disable/edit/remove must call `registry.refresh()` right after committing, so changes apply immediately rather than on the next health tick.
 
 **Likely question: why remember the protocol era instead of probing every time?** With per-call clients, `auto` mode against a legacy server costs a rejected `server/discover` round trip on *every* call and health check, which is wasted latency and log noise on the upstream. We probe once, cache the result on the connection, and clear it on reset, so an upgraded server gets re-detected.
+
+---
+
+## Phase 5: REST API, auth/roles, dashboard
+
+### What was built
+- **REST API** in the gateway (`gateway/api/`, FastAPI routers):
+  - login/logout/me, invite links, members (invite, role, enable/disable), API keys (own; admins: anyone's), upstream servers (CRUD + test), audit (filters + pagination).
+  - Alembic migration `0002` adds `user_sessions` and invite columns.
+- **Dashboard** (`services/dashboard`): React 19 + TypeScript 7 + Vite 8 + Pico CSS, served by non-root nginx with a strict CSP.
+  - Pages: Login, Accept invite, Servers, Members, API keys (+ "Connect your MCP client"), Audit, Chat (placeholder).
+- **Platform chart:**
+  - Dashboard Deployment (read-only root FS, `emptyDir` for `/tmp`).
+  - One `app` Ingress: `/mcp` and `/api` → gateway, `/` → dashboard.
+  - Dashboard NetworkPolicy (in from Traefik only, no egress).
+  - Gateway env `PUBLIC_URL` and `COOKIE_SECURE`.
+- **Proof of server-side roles:** 22 new API tests (75 gateway tests total) and `make api-role-check` (curl through the real Ingress: 403 on every admin endpoint for a member).
+
+### Key concepts
+- **Sessions vs tokens**: a server-side session is a random ID in a cookie plus a DB row. Because the server looks it up every time, logout, disabling or a role change takes effect on the very next request. A signed stateless cookie (JWT style) can't be revoked before it expires without a denylist, which is just a session table again.
+- **Cookie flags**:
+  - `HttpOnly`: JavaScript can't read the cookie, so an XSS bug can't steal it.
+  - `SameSite=Strict`: the browser doesn't attach it to requests started by other sites (the main CSRF defense).
+  - `Secure`: only sent over HTTPS (on in prod).
+- **CSRF**: another site makes your browser send a request with *your* cookie. Defenses here are `SameSite=Strict` plus an `Origin` check on every state-changing request (browsers always send `Origin` on POST/PATCH/DELETE). Non-browser clients (curl) don't send it, and they can't hold a victim's cookie anyway.
+- **Same origin, no CORS**: the UI and the API live on one host (`app.localtest.me`), split by path at the Ingress. The browser treats them as one origin, so there's no CORS config, the cookie just works, and the CSP can say `connect-src 'self'`.
+- **AuthN vs AuthZ in FastAPI**: dependencies run before a route. `current_user` (who are you? 401 if nobody) and `require_admin` (may you? 403 if not) are declared per route, so a route can't forget authorization: its signature shows it. The UI hiding buttons is convenience only.
+- **Enumeration-resistant errors**:
+  - Same message and similar timing for a wrong password vs an unknown email (we still run argon2 against a dummy hash).
+  - 404, not 403, for another user's key ID.
+  - Login rate limit: 5 failures per 15 minutes.
+- **Invite links**: a bearer secret in a URL, so treat it like a password. It's random, stored only as a hash, expires, and is single-use. Showing it once to the admin replaces email delivery.
+- **Write-only secrets in an API**: responses never contain upstream credentials (`credential_set` instead). PATCH distinguishes "field omitted" (keep) from `null` (clear) with Pydantic's `model_fields_set`.
+- **SPA + nginx**: nginx returns `index.html` for unknown paths and React Router picks the page. Hashed asset names (`index-CKC3tAsL.js`) can be cached for a year because a new build means a new name.
+- **CSP**: `default-src 'self'` means the browser refuses inline scripts and anything from other origins, so injected `<script>` tags don't execute. We avoided inline styles too, so `style-src 'self'` holds.
+- **Bug the tests caught**: after an admin change, the API returned the *old* status. The registry wrote the new status through its own DB session, but the request's session (with `expire_on_commit=False`) still had the row cached. Fix: `session.expire_all()` before re-reading.
+
+### Likely interview questions
+1. **How do you make sure a member can't do admin things?**
+   Every admin route depends on `require_admin`, which re-reads the user from the database for each request via their session. It's verified twice: `tests/test_api.py` calls every admin endpoint as a member and as an anonymous user (403/401), and `make api-role-check` does the same with curl through the real Ingress against the deployed system. Members' audit queries are rewritten server-side to `user_id = self`, whatever they ask for. The dashboard hiding buttons is just UX.
+2. **Why server-side sessions instead of a JWT?**
+   Immediate revocation and less to get wrong. Logout deletes the row, and disabling a user or demoting an admin applies on their next click. A JWT stays valid until expiry unless you add a denylist, which is a DB lookup per request anyway. With one gateway replica and Postgres already in place, a sessions table is the simplest correct design. The token is stored hashed, like API keys, so a DB leak doesn't hand out live sessions.
+3. **Walk me through what happens when an admin disables the fx server in the dashboard.**
+   `Servers.tsx` calls `api.updateServer("fx", {enabled:false})`, which sends `PATCH /api/servers/fx` with the session cookie. Traefik routes `/api` to the gateway, where the Origin check runs and `require_admin` passes. The route sets `enabled=false`, commits, then awaits `registry.refresh()` (under a lock shared with the health loop). The refresh drops fx's pool and tool cache and publishes `list_changed`. The response returns the new state, so every MCP client's next `tools/list` lacks `fx__*` (measured 0.06s after the click) and a direct call returns `upstream 'fx' is disabled` (audited as `denied`).

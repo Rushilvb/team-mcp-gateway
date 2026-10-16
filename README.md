@@ -4,7 +4,7 @@ A WooCommerce store on Kubernetes, plus a team MCP gateway: admins register MCP 
 and every team member uses all of their tools through one MCP endpoint and a chat agent.
 The same Helm charts run locally (k3d) and on a VPS (k3s); only values files differ.
 
-> Status: Phase 4 (store, MCP servers, gateway core at http://app.localtest.me/mcp). Sections marked _TODO_ are filled in by later phases.
+> Status: Phase 5 (store, MCP servers, gateway + dashboard at http://app.localtest.me). Sections marked _TODO_ are filled in by later phases.
 
 ## Repository layout
 
@@ -38,7 +38,7 @@ make prereqs
 ```bash
 make cluster-up     # creates the k3d cluster "urumi" with ports 80/443 mapped to Traefik
 make status         # nodes + Traefik
-make test           # service unit tests (run inside Docker)
+make test           # all service tests + dashboard type-check (run inside Docker)
 make build load-images   # build our images and import them into k3d (no registry needed)
 make deploy-local   # store + platform charts (first run ~5 min: image pulls + WooCommerce download)
 make store-admin    # WordPress admin URL + password
@@ -102,15 +102,34 @@ notes-mcp and fx-mcp require a credential. `make mcp-tokens` prints both. Add it
 
 Without the header, both answer `401`. In normal use only the gateway holds these credentials.
 
-## Connecting Claude Code / Cursor / MCP Inspector
+## Using the dashboard
 
-All you need is the gateway URL, `http://app.localtest.me/mcp`, and **your own API key**. Until the
-dashboard exists (Phase 5), keys are created with the gateway CLI:
+Open `http://app.localtest.me`. The first admin is created from a Kubernetes Secret on first start:
 
 ```bash
-make gateway-user EMAIL=b@example.com     # once per team member
-make gateway-key EMAIL=b@example.com      # prints urk_... once
+make gateway-admin     # prints the admin email + password
 ```
+
+| Page | Who | What |
+|---|---|---|
+| **Servers** | everyone (admins edit) | Status of each upstream (Connected / Unreachable + error / Disabled) and its tools. Admins can add, edit, enable/disable, test and remove servers. Changes apply to every client immediately. |
+| **API keys** | everyone | Create keys (shown once), revoke them, and copy-paste setup for Claude Code / Cursor / Inspector. |
+| **Audit log** | everyone (members: own calls) | Every tool call, filterable by user, server, outcome, channel and date. |
+| **Members** | admins | Invite people (one-time link, no email needed), change roles, disable accounts, revoke anyone's keys. |
+| **Chat** | everyone | Phase 6. |
+
+**Inviting a team member:**
+1. As admin, go to Members, enter the person's email, and click Invite.
+2. Copy the one-time link (valid 7 days) and send it to them.
+3. They open it, set a password, and land on their API keys page.
+
+Roles are enforced by the gateway, not just hidden in the UI. `make api-role-check` proves it via the API.
+
+## Connecting Claude Code / Cursor / MCP Inspector
+
+All you need is the gateway URL, `http://app.localtest.me/mcp`, and **your own API key**. Create one on
+the dashboard's **API keys** page, which also shows ready-to-paste snippets. In scripts you can use the CLI
+instead (`make gateway-user EMAIL=... && make gateway-key EMAIL=...`).
 
 Tools appear as `<server>__<tool>`, e.g. `woo__list_orders`, `notes__add_note`, `fx__convert_currency`.
 
@@ -123,8 +142,8 @@ Tools appear as `<server>__<tool>`, e.g. `woo__list_orders`, `notes__add_note`, 
                                       "headers": { "Authorization": "Bearer urk_..." } } } }
   ```
 
-Revoking a key (`make gateway-revoke PREFIX=urk_xxxxxxxx`) takes effect on the next request. Every call is
-recorded in the audit log (`make gateway-audit`). Details: [services/gateway/README.md](services/gateway/README.md).
+Revoking a key (dashboard, or `make gateway-revoke PREFIX=urk_xxxxxxxx`) takes effect on the next request.
+Every call is recorded in the audit log. Details: [services/gateway/README.md](services/gateway/README.md).
 
 ## Using the chat agent
 _TODO (Phase 6)_
