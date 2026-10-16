@@ -4,7 +4,7 @@ A WooCommerce store on Kubernetes, plus a team MCP gateway: admins register MCP 
 and every team member uses all of their tools through one MCP endpoint and a chat agent.
 The same Helm charts run locally (k3d) and on a VPS (k3s); only values files differ.
 
-> Status: Phase 2 (store + WooCommerce MCP server). Sections marked _TODO_ are filled in by later phases.
+> Status: Phase 3 (store + woo/notes/fx MCP servers + Postgres). Sections marked _TODO_ are filled in by later phases.
 
 ## Repository layout
 
@@ -92,6 +92,15 @@ kubectl -n platform port-forward svc/woo-mcp 8000:8000
 
 Then run MCP Inspector (`npx @modelcontextprotocol/inspector@2.8.0`). Choose transport **Streamable HTTP**
 and URL `http://localhost:8000/mcp`. See [services/woo-mcp/README.md](services/woo-mcp/README.md) for the tools.
+
+notes-mcp and fx-mcp require a credential. `make mcp-tokens` prints both. Add it as a custom header in Inspector:
+
+| Server | Port-forward | Header |
+|---|---|---|
+| notes-mcp ([README](services/notes-mcp/README.md)) | `kubectl -n platform port-forward svc/notes-mcp 8001:8000` | `Authorization: Bearer <token>` |
+| fx-mcp ([README](services/fx-mcp/README.md)) | `kubectl -n platform port-forward svc/fx-mcp 8002:8000` | `X-API-Key: <key>` |
+
+Without the header, both answer `401`. In normal use only the gateway holds these credentials.
 
 ## Connecting Claude Code / Cursor / MCP Inspector
 _TODO (Phase 4/5)_
