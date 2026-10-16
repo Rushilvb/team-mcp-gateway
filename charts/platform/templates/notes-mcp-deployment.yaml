@@ -1,0 +1,57 @@
+{{- $n := .Values.notesMcp }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notes-mcp
+  labels: {{- include "platform.labels" . | nindent 4 }}
+    app.kubernetes.io/name: notes-mcp
+spec:
+  replicas: {{ $n.replicas }}
+  selector:
+    matchLabels: {{- include "platform.selectorLabels" (dict "ctx" $ "name" "notes-mcp") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "platform.labels" . | nindent 8 }}
+        app.kubernetes.io/name: notes-mcp
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: notes-mcp
+          image: "{{ $n.image.repository }}:{{ required "notesMcp.image.tag is required (make deploy-local sets it)" $n.image.tag }}"
+          imagePullPolicy: {{ $n.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: NOTES_TOKEN
+              valueFrom: { secretKeyRef: { name: notes-mcp-auth, key: token } }
+            # Standard libpq variables, read by asyncpg directly.
+            - name: PGHOST
+              value: postgres
+            - name: PGDATABASE
+              value: notes
+            - name: PGUSER
+              value: notes
+            - name: PGPASSWORD
+              valueFrom: { secretKeyRef: { name: postgres-notes, key: password } }
+            - name: MCP_ALLOWED_HOSTS
+              value: {{ include "platform.mcpAllowedHosts" (dict "ctx" $ "name" "notes-mcp") | quote }}
+          # The app waits (up to 60s) for Postgres before it starts listening,
+          # so the pod only becomes Ready once the database is reachable.
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 70
+            periodSeconds: 20
+          resources: {{- toYaml $n.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }

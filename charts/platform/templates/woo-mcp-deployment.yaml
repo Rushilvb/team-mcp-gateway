@@ -47,7 +47,7 @@ spec:
             # Host headers our MCP endpoint accepts (DNS-rebinding protection):
             # the Service's in-cluster names, plus localhost for port-forward.
             - name: MCP_ALLOWED_HOSTS
-              value: "woo-mcp:*,woo-mcp.{{ .Release.Namespace }}:*,woo-mcp.{{ .Release.Namespace }}.svc:*,woo-mcp.{{ .Release.Namespace }}.svc.cluster.local:*,localhost:*,127.0.0.1:*"
+              value: {{ include "platform.mcpAllowedHosts" (dict "ctx" $ "name" "woo-mcp") | quote }}
           # /healthz only checks this process. It does NOT call the store:
           # restarting woo-mcp wouldn't fix a store outage, and each tool call
           # already reports "store unreachable" clearly.

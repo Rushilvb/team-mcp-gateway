@@ -1,4 +1,4 @@
-# Three stages share one base: `test` runs the unit tests (make test),
+# Three stages share one base: `test` holds the unit tests (make test runs it),
 # `runtime` is the image we deploy (make build). Tests never ship.
 FROM python:3.12.15-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -14,7 +14,7 @@ FROM base AS test
 COPY requirements-dev.txt pytest.ini ./
 RUN pip install -r requirements-dev.txt
 COPY tests ./tests
-RUN python -m pytest -v
+CMD ["python", "-m", "pytest", "-v"]
 
 FROM base AS runtime
 # Numeric non-root user: Kubernetes' runAsNonRoot can verify a number, not a name.

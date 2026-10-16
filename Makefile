@@ -7,10 +7,16 @@ CLUSTER_CFG  := k3d/cluster.yaml
 # Image tag = hash of the service's source files (tracked + untracked, minus
 # gitignored). It changes exactly when the code changes, so Helm sees a new tag
 # and rolls the pod; rebuilding unchanged code gives the same tag.
-src_hash = $(shell cd services/$(1) && git ls-files -co --exclude-standard | sort | xargs sha1sum | sha1sum | cut -c1-12)
-TAG_WOO  := $(call src_hash,woo-mcp)
+tag = $(shell cd services/$(1) && git ls-files -co --exclude-standard | sort | xargs sha1sum | sha1sum | cut -c1-12)
 
-.PHONY: help prereqs cluster-up status teardown test build load-images lint deploy-local store-admin store-logs deploy-prod dod-check
+PY_SERVICES := woo-mcp notes-mcp fx-mcp
+IMAGES      := $(foreach s,$(PY_SERVICES),urumi/$(s):$(call tag,$(s)))
+
+# Throwaway Postgres for tests that need a real database (notes-mcp).
+TEST_NET := urumi-test
+TEST_PG  := urumi-test-pg
+
+.PHONY: help prereqs cluster-up status teardown test build load-images lint deploy-local store-admin store-logs mcp-tokens deploy-prod dod-check
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -38,25 +44,38 @@ status: ## Show nodes and ingress controller
 teardown: ## Delete the local cluster (destroys all data in it)
 	k3d cluster delete $(CLUSTER)
 
-test: ## Run service unit tests (inside Docker; no local Python needed)
-	docker build --target test services/woo-mcp
+test: ## Run service tests in Docker (starts a throwaway Postgres for notes-mcp)
+	docker network create $(TEST_NET) >/dev/null 2>&1 || true
+	docker rm -f $(TEST_PG) >/dev/null 2>&1 || true
+	docker run -d --rm --name $(TEST_PG) --network $(TEST_NET) -e POSTGRES_PASSWORD=test postgres:18.4 >/dev/null
+	@status=0; for s in $(PY_SERVICES); do \
+	  echo "=== $$s"; \
+	  docker build -q --target test -t urumi/$$s:test services/$$s >/dev/null && \
+	  docker run --rm --network $(TEST_NET) \
+	    -e TEST_DATABASE_URL=postgresql://postgres:test@$(TEST_PG)/postgres urumi/$$s:test || status=1; \
+	done; docker rm -f $(TEST_PG) >/dev/null; exit $$status
 
-build: ## Build service images
-	docker build --target runtime -t urumi/woo-mcp:$(TAG_WOO) services/woo-mcp
+build: ## Build service images (tag = hash of each service's source)
+	$(foreach s,$(PY_SERVICES),docker build --target runtime -t urumi/$(s):$(call tag,$(s)) services/$(s) && ) true
 
 load-images: ## Import local images into the k3d cluster (no registry needed)
-	k3d image import urumi/woo-mcp:$(TAG_WOO) -c $(CLUSTER)
+	k3d image import $(IMAGES) -c $(CLUSTER)
 
 lint: ## Lint both charts (dummy key values: lookup has no cluster during lint)
 	helm lint charts/store -f charts/store/values-local.yaml
 	helm lint charts/platform -f charts/platform/values-local.yaml \
-	  --set wooMcp.image.tag=lint --set wooMcp.store.consumerKey=x --set wooMcp.store.consumerSecret=x
+	  --set wooMcp.image.tag=lint --set notesMcp.image.tag=lint --set fxMcp.image.tag=lint \
+	  --set wooMcp.store.consumerKey=x --set wooMcp.store.consumerSecret=x
 
 deploy-local: ## Install/upgrade the charts on the local cluster (values-local.yaml)
 	helm upgrade --install store charts/store -n store --create-namespace \
 	  -f charts/store/values-local.yaml --wait --timeout 15m
 	helm upgrade --install platform charts/platform -n platform --create-namespace \
-	  -f charts/platform/values-local.yaml --set wooMcp.image.tag=$(TAG_WOO) --wait --timeout 5m
+	  -f charts/platform/values-local.yaml \
+	  --set wooMcp.image.tag=$(call tag,woo-mcp) \
+	  --set notesMcp.image.tag=$(call tag,notes-mcp) \
+	  --set fxMcp.image.tag=$(call tag,fx-mcp) \
+	  --wait --timeout 5m
 
 store-admin: ## Print the WordPress admin URL, user and password
 	@echo "URL:      http://shop.localtest.me/wp-admin"
@@ -65,6 +84,10 @@ store-admin: ## Print the WordPress admin URL, user and password
 
 store-logs: ## Show the store bootstrap Job logs
 	kubectl -n store logs job/store-bootstrap --all-containers
+
+mcp-tokens: ## Print the notes/fx upstream credentials (for testing with MCP Inspector)
+	@echo "notes-mcp  Authorization: Bearer $$(kubectl -n platform get secret notes-mcp-auth -o jsonpath='{.data.token}' | base64 -d)"
+	@echo "fx-mcp     X-API-Key: $$(kubectl -n platform get secret fx-mcp-auth -o jsonpath='{.data.api-key}' | base64 -d)"
 
 deploy-prod: ## helm upgrade --install charts with values-prod.yaml (Phase 8)
 	@echo "deploy-prod: implemented in Phase 8"

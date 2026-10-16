@@ -24,3 +24,49 @@ wooMcp:
   resources:
     requests: { cpu: 50m,  memory: 96Mi }
     limits:   { cpu: 500m, memory: 256Mi }
+
+# "" = use the cluster's default StorageClass.
+storageClass: ""
+
+postgres:
+  image:
+    repository: postgres
+    tag: "18.4"
+    pullPolicy: IfNotPresent
+  storage: 2Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: "1",  memory: 512Mi }
+
+notesMcp:
+  image:
+    repository: urumi/notes-mcp
+    tag: ""                       # set by the Makefile, required
+    pullPolicy: IfNotPresent
+  replicas: 1
+  token: ""                       # bearer token clients must send; empty = generate
+  resources:
+    requests: { cpu: 50m,  memory: 96Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+
+fxMcp:
+  image:
+    repository: urumi/fx-mcp
+    tag: ""                       # set by the Makefile, required
+    pullPolicy: IfNotPresent
+  replicas: 1
+  apiKey: ""                      # X-API-Key clients must send; empty = generate
+  # Reference rates (static, not live): value of 1 unit of each currency in `base`.
+  rates:
+    base: INR
+    as_of: "2026-10-01"
+    rates:
+      USD: "84.10"
+      EUR: "91.50"
+      GBP: "109.80"
+      AED: "22.90"
+      SGD: "64.70"
+      JPY: "0.56"
+  resources:
+    requests: { cpu: 25m,  memory: 64Mi }
+    limits:   { cpu: 250m, memory: 192Mi }

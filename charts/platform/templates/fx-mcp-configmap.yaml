@@ -1,0 +1,10 @@
+# Reference exchange rates, mounted into fx-mcp as /config/rates.json. fx-mcp
+# re-reads the file on every call, and Kubernetes updates mounted ConfigMaps in
+# place, so new rates apply after `helm upgrade` without a pod restart.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fx-rates
+  labels: {{- include "platform.labels" . | nindent 4 }}
+data:
+  rates.json: {{ .Values.fxMcp.rates | toJson | quote }}

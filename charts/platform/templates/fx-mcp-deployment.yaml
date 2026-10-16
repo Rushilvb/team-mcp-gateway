@@ -1,0 +1,56 @@
+{{- $f := .Values.fxMcp }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fx-mcp
+  labels: {{- include "platform.labels" . | nindent 4 }}
+    app.kubernetes.io/name: fx-mcp
+spec:
+  replicas: {{ $f.replicas }}
+  selector:
+    matchLabels: {{- include "platform.selectorLabels" (dict "ctx" $ "name" "fx-mcp") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "platform.labels" . | nindent 8 }}
+        app.kubernetes.io/name: fx-mcp
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: fx-mcp
+          image: "{{ $f.image.repository }}:{{ required "fxMcp.image.tag is required (make deploy-local sets it)" $f.image.tag }}"
+          imagePullPolicy: {{ $f.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: FX_API_KEY
+              valueFrom: { secretKeyRef: { name: fx-mcp-auth, key: api-key } }
+            - name: RATES_FILE
+              value: /config/rates.json
+            - name: MCP_ALLOWED_HOSTS
+              value: {{ include "platform.mcpAllowedHosts" (dict "ctx" $ "name" "fx-mcp") | quote }}
+          volumeMounts:
+            - name: rates
+              mountPath: /config
+              readOnly: true
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources: {{- toYaml $f.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: rates
+          configMap:
+            name: fx-rates

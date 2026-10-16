@@ -1,0 +1,24 @@
+# Runs ONCE, when Postgres starts with an empty data volume (the official
+# image executes /docker-entrypoint-initdb.d/*). It never re-runs, which is why
+# the gateway's database is created now even though Phase 4 first uses it.
+# Separate databases and owner roles: notes-mcp cannot read the gateway's users
+# or API-key hashes, and vice versa.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-initdb
+  labels: {{- include "platform.labels" . | nindent 4 }}
+data:
+  01-databases.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    # Passwords are passed as psql variables (:'name' quotes them safely).
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres \
+      -v notes_pw="$NOTES_DB_PASSWORD" -v gateway_pw="$GATEWAY_DB_PASSWORD" <<'SQL'
+    CREATE ROLE notes LOGIN PASSWORD :'notes_pw';
+    CREATE DATABASE notes OWNER notes;
+    REVOKE ALL ON DATABASE notes FROM PUBLIC;
+    CREATE ROLE gateway LOGIN PASSWORD :'gateway_pw';
+    CREATE DATABASE gateway OWNER gateway;
+    REVOKE ALL ON DATABASE gateway FROM PUBLIC;
+    SQL

@@ -1,0 +1,14 @@
+# Headless Service: required by the StatefulSet for stable DNS (postgres-0.postgres).
+# Clients connect to "postgres".
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels: {{- include "platform.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector: {{- include "platform.selectorLabels" (dict "ctx" $ "name" "postgres") | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres

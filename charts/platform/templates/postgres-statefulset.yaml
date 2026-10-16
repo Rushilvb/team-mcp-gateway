@@ -1,0 +1,79 @@
+{{- $p := .Values.postgres }}
+# Same shape as the store's MariaDB: StatefulSet so the pod always gets its own
+# PVC (data-postgres-0) back after a restart.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels: {{- include "platform.labels" . | nindent 4 }}
+    app.kubernetes.io/name: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels: {{- include "platform.selectorLabels" (dict "ctx" $ "name" "postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "platform.labels" . | nindent 8 }}
+        app.kubernetes.io/name: postgres
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999          # "postgres" user in the official image
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: postgres
+          image: "{{ $p.image.repository }}:{{ $p.image.tag }}"
+          imagePullPolicy: {{ $p.image.pullPolicy }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgres-superuser, key: password } }
+            - name: NOTES_DB_PASSWORD           # read by the init script only
+              valueFrom: { secretKeyRef: { name: postgres-notes, key: password } }
+            - name: GATEWAY_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgres-gateway, key: password } }
+          volumeMounts:
+            # Postgres 18 images keep data in /var/lib/postgresql/18/docker, a
+            # subdirectory the postgres user creates itself (so it owns it).
+            - name: data
+              mountPath: /var/lib/postgresql
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          startupProbe:         # first init (initdb + our script) takes a few seconds
+            exec: { command: ["pg_isready", "-U", "postgres", "-h", "127.0.0.1"] }
+            periodSeconds: 3
+            failureThreshold: 60
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "postgres", "-h", "127.0.0.1"] }
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "postgres", "-h", "127.0.0.1"] }
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources: {{- toYaml $p.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: initdb
+          configMap:
+            name: postgres-initdb
+            defaultMode: 0555
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- include "platform.storageClass" . | nindent 8 }}
+        resources:
+          requests:
+            storage: {{ $p.storage }}

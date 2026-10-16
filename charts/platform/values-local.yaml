@@ -2,3 +2,4 @@
 wooMcp:
   store:
     publicHost: shop.localtest.me
+storageClass: local-path          # k3s's built-in provisioner

@@ -1,0 +1,17 @@
+# Only notes-mcp and the gateway may connect; Postgres itself needs no egress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+  labels: {{- include "platform.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "platform.selectorLabels" (dict "ctx" $ "name" "postgres") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: notes-mcp } }
+        - podSelector: { matchLabels: { app.kubernetes.io/name: gateway } }
+      ports:
+        - { protocol: TCP, port: 5432 }
+  egress: []   # deny all outbound
