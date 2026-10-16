@@ -9,14 +9,14 @@ CLUSTER_CFG  := k3d/cluster.yaml
 # and rolls the pod; rebuilding unchanged code gives the same tag.
 tag = $(shell cd services/$(1) && git ls-files -co --exclude-standard | sort | xargs sha1sum | sha1sum | cut -c1-12)
 
-PY_SERVICES := woo-mcp notes-mcp fx-mcp
+PY_SERVICES := woo-mcp notes-mcp fx-mcp gateway
 IMAGES      := $(foreach s,$(PY_SERVICES),urumi/$(s):$(call tag,$(s)))
 
 # Throwaway Postgres for tests that need a real database (notes-mcp).
 TEST_NET := urumi-test
 TEST_PG  := urumi-test-pg
 
-.PHONY: help prereqs cluster-up status teardown test build load-images lint deploy-local store-admin store-logs mcp-tokens deploy-prod dod-check
+.PHONY: help prereqs cluster-up status teardown test build load-images lint deploy-local store-admin store-logs mcp-tokens gateway-admin gateway-user gateway-key gateway-keys gateway-revoke gateway-upstreams gateway-audit deploy-prod dod-check
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -64,7 +64,7 @@ load-images: ## Import local images into the k3d cluster (no registry needed)
 lint: ## Lint both charts (dummy key values: lookup has no cluster during lint)
 	helm lint charts/store -f charts/store/values-local.yaml
 	helm lint charts/platform -f charts/platform/values-local.yaml \
-	  --set wooMcp.image.tag=lint --set notesMcp.image.tag=lint --set fxMcp.image.tag=lint \
+	  --set wooMcp.image.tag=lint --set notesMcp.image.tag=lint --set fxMcp.image.tag=lint --set gateway.image.tag=lint \
 	  --set wooMcp.store.consumerKey=x --set wooMcp.store.consumerSecret=x
 
 deploy-local: ## Install/upgrade the charts on the local cluster (values-local.yaml)
@@ -75,6 +75,7 @@ deploy-local: ## Install/upgrade the charts on the local cluster (values-local.y
 	  --set wooMcp.image.tag=$(call tag,woo-mcp) \
 	  --set notesMcp.image.tag=$(call tag,notes-mcp) \
 	  --set fxMcp.image.tag=$(call tag,fx-mcp) \
+	  --set gateway.image.tag=$(call tag,gateway) \
 	  --wait --timeout 5m
 
 store-admin: ## Print the WordPress admin URL, user and password
@@ -88,6 +89,35 @@ store-logs: ## Show the store bootstrap Job logs
 mcp-tokens: ## Print the notes/fx upstream credentials (for testing with MCP Inspector)
 	@echo "notes-mcp  Authorization: Bearer $$(kubectl -n platform get secret notes-mcp-auth -o jsonpath='{.data.token}' | base64 -d)"
 	@echo "fx-mcp     X-API-Key: $$(kubectl -n platform get secret fx-mcp-auth -o jsonpath='{.data.api-key}' | base64 -d)"
+
+# --- Gateway admin CLI (until the dashboard exists). Usage examples:
+#   make gateway-user EMAIL=b@example.com [ROLE=member]
+#   make gateway-key EMAIL=b@example.com
+#   make gateway-revoke PREFIX=urk_Ab3dE6gH
+GW_CLI := kubectl -n platform exec deploy/gateway -c gateway -- python -m gateway.cli
+ROLE   ?= member
+
+gateway-admin: ## Print the bootstrap admin's email and password
+	@echo "Email:    $$(kubectl -n platform get secret gateway-admin -o jsonpath='{.data.email}' | base64 -d)"
+	@echo "Password: $$(kubectl -n platform get secret gateway-admin -o jsonpath='{.data.password}' | base64 -d)"
+
+gateway-user: ## Create a user: EMAIL=... [ROLE=member|admin]
+	$(GW_CLI) create-user --email $(EMAIL) --role $(ROLE)
+
+gateway-key: ## Create an API key (shown once): EMAIL=...
+	$(GW_CLI) create-key --email $(EMAIL)
+
+gateway-keys: ## List API keys
+	$(GW_CLI) list-keys
+
+gateway-revoke: ## Revoke an API key: PREFIX=urk_...
+	$(GW_CLI) revoke-key --prefix $(PREFIX)
+
+gateway-upstreams: ## Show upstream servers and their status
+	$(GW_CLI) upstreams
+
+gateway-audit: ## Show the latest audit log entries
+	$(GW_CLI) audit --limit 30
 
 deploy-prod: ## helm upgrade --install charts with values-prod.yaml (Phase 8)
 	@echo "deploy-prod: implemented in Phase 8"

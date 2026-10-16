@@ -1,0 +1,94 @@
+{{- $g := .Values.gateway }}
+{{- $ns := .Release.Namespace }}
+{{- /* Bootstrap upstreams as JSON for the app; credentials go in separate env vars from Secrets. */}}
+{{- $upstreams := list }}
+{{- $allow := list }}
+{{- range $g.bootstrapUpstreams }}
+{{- $host := printf "%s.%s.svc.cluster.local" .service $ns }}
+{{- $allow = append $allow $host }}
+{{- $u := dict "slug" .slug "name" .name "url" (printf "http://%s:8000/mcp" $host) "auth_type" .authType }}
+{{- if .headerName }}{{ $_ := set $u "header_name" .headerName }}{{ end }}
+{{- if .credentialSecret }}{{ $_ := set $u "credential_env" (printf "UPSTREAM_CREDENTIAL_%s" (.slug | upper | replace "-" "_")) }}{{ end }}
+{{- $upstreams = append $upstreams $u }}
+{{- end }}
+{{- $allow = concat $allow $g.extraSsrfAllowedHosts }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  labels: {{- include "platform.labels" . | nindent 4 }}
+    app.kubernetes.io/name: gateway
+spec:
+  replicas: 1   # health loop + list_changed bus are in-process; multi-replica is out of scope
+  selector:
+    matchLabels: {{- include "platform.selectorLabels" (dict "ctx" $ "name" "gateway") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "platform.labels" . | nindent 8 }}
+        app.kubernetes.io/name: gateway
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      initContainers:
+        # Bring the DB schema up to date before the app starts (safe: 1 replica).
+        - name: migrate
+          image: "{{ $g.image.repository }}:{{ required "gateway.image.tag is required (make deploy-local sets it)" $g.image.tag }}"
+          imagePullPolicy: {{ $g.image.pullPolicy }}
+          command: ["alembic", "upgrade", "head"]
+          env: {{- include "gateway.dbEnv" . | nindent 12 }}
+          resources: {{- toYaml $g.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+      containers:
+        - name: gateway
+          image: "{{ $g.image.repository }}:{{ $g.image.tag }}"
+          imagePullPolicy: {{ $g.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            {{- include "gateway.dbEnv" . | nindent 12 }}
+            - name: GATEWAY_FERNET_KEY
+              valueFrom: { secretKeyRef: { name: gateway-fernet, key: key } }
+            - name: GATEWAY_ADMIN_EMAIL
+              valueFrom: { secretKeyRef: { name: gateway-admin, key: email } }
+            - name: GATEWAY_ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: gateway-admin, key: password } }
+            - name: CALL_TIMEOUT_SECONDS
+              value: {{ $g.callTimeoutSeconds | quote }}
+            - name: HEALTH_INTERVAL_SECONDS
+              value: {{ $g.healthIntervalSeconds | quote }}
+            - name: HEALTH_TIMEOUT_SECONDS
+              value: {{ $g.healthTimeoutSeconds | quote }}
+            - name: SSRF_ALLOWED_HOSTS
+              value: {{ join "," $allow | quote }}
+            # Host headers accepted on /mcp: the public host (Traefik forwards it
+            # without a port), plus in-cluster names (chat agent, Phase 6).
+            - name: MCP_ALLOWED_HOSTS
+              value: {{ printf "%s,%s:*,%s" $g.publicHost $g.publicHost (include "platform.mcpAllowedHosts" (dict "ctx" $ "name" "gateway")) | quote }}
+            - name: BOOTSTRAP_UPSTREAMS
+              value: {{ $upstreams | toJson | quote }}
+            {{- range $g.bootstrapUpstreams }}
+            {{- if .credentialSecret }}
+            - name: {{ printf "UPSTREAM_CREDENTIAL_%s" (.slug | upper | replace "-" "_") }}
+              valueFrom: { secretKeyRef: { name: {{ .credentialSecret.name }}, key: {{ .credentialSecret.key }} } }
+            {{- end }}
+            {{- end }}
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources: {{- toYaml $g.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }

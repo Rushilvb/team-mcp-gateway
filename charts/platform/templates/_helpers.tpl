@@ -48,3 +48,15 @@ Usage: include "platform.mcpAllowedHosts" (dict "ctx" $ "name" "notes-mcp")
 storageClassName: {{ .Values.storageClass }}
 {{- end -}}
 {{- end }}
+
+{{/* Database connection env for the gateway (libpq names; the app builds its URL from them). */}}
+{{- define "gateway.dbEnv" -}}
+- name: PGHOST
+  value: postgres
+- name: PGDATABASE
+  value: gateway
+- name: PGUSER
+  value: gateway
+- name: PGPASSWORD
+  valueFrom: { secretKeyRef: { name: postgres-gateway, key: password } }
+{{- end }}

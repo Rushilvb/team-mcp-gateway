@@ -70,3 +70,46 @@ fxMcp:
   resources:
     requests: { cpu: 25m,  memory: 64Mi }
     limits:   { cpu: 250m, memory: 192Mi }
+
+gateway:
+  image:
+    repository: urumi/gateway
+    tag: ""                       # set by the Makefile, required
+    pullPolicy: IfNotPresent
+  # Public host for the dashboard, /api and /mcp (Ingress + allowed Host header).
+  publicHost: app.localtest.me
+  ingress:
+    className: traefik
+    annotations: {}
+    tls:
+      enabled: false
+      secretName: ""
+  # Bootstrap admin, created on first start if missing. Empty password = generate.
+  adminEmail: admin@example.com
+  adminPassword: ""
+  callTimeoutSeconds: 15
+  healthIntervalSeconds: 15
+  healthTimeoutSeconds: 5
+  # Upstreams registered on first start (in this order). `service` = a Service in
+  # this namespace on port 8000; it is also added to the SSRF allowlist.
+  bootstrapUpstreams:
+    - slug: woo
+      name: WooCommerce store
+      service: woo-mcp
+      authType: none
+    - slug: notes
+      name: Team notes
+      service: notes-mcp
+      authType: bearer
+      credentialSecret: { name: notes-mcp-auth, key: token }
+    - slug: fx
+      name: Currency conversion
+      service: fx-mcp
+      authType: header
+      headerName: X-API-Key
+      credentialSecret: { name: fx-mcp-auth, key: api-key }
+  # Extra cluster-internal hostnames admins may register later (SSRF allowlist).
+  extraSsrfAllowedHosts: []
+  resources:
+    requests: { cpu: 100m, memory: 192Mi }
+    limits:   { cpu: "1",  memory: 512Mi }
