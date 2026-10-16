@@ -1,0 +1,9 @@
+# Runtime dependencies (pinned; each release is at least two weeks old).
+mcp==2.2.0           # brings httpx2, starlette, anyio, pydantic
+fastapi==0.142.2
+uvicorn==0.54.0
+sqlalchemy[asyncio]==2.1.2   # [asyncio] adds greenlet, required for the async engine
+alembic==1.20.0
+asyncpg==0.31.0
+cryptography==50.0.2 # Fernet: upstream credentials encrypted at rest
+argon2-cffi==25.1.0  # password hashing

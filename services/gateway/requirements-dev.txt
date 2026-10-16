@@ -1,0 +1,2 @@
+# Async tests use anyio's pytest plugin (anyio ships with mcp).
+pytest==9.1.1
