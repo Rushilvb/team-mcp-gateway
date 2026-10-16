@@ -1,4 +1,4 @@
-"""Gateway application: FastAPI app hosting the /mcp endpoint (and /api from Phase 5).
+"""Gateway application: FastAPI app hosting the /mcp endpoint and the /api REST API.
 
 Run: uvicorn gateway.app:create_app --factory --host 0.0.0.0 --port 8000
 """
@@ -12,6 +12,8 @@ from fastapi import FastAPI
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.routing import Route
 
+from .api import router as api_router
+from .api.deps import LoginLimiter
 from .audit import Audit
 from .auth import Authenticator, McpAuth
 from .bootstrap import bootstrap
@@ -65,7 +67,10 @@ def create_app(settings: Settings | None = None, check_url: UrlCheck | None = No
         await engine.dispose()
 
     app = FastAPI(title="Team MCP Gateway", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    # Shared objects the REST API routes reach through request.app.state.
     app.state.settings, app.state.sessionmaker, app.state.registry, app.state.audit = settings, sm, registry, audit
+    app.state.box, app.state.check_url, app.state.login_limiter = box, check_url, LoginLimiter()
+    app.include_router(api_router)
 
     @app.get("/healthz", include_in_schema=False)
     async def healthz() -> str:

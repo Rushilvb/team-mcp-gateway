@@ -161,6 +161,9 @@ class Registry:
         self._states: dict[str, UpstreamState] = {}   # slug -> state, in registration order
         self._tool_names: frozenset[str] = frozenset()
         self.on_tools_changed: Callable[[], Awaitable[None]] | None = None
+        # The health loop and admin actions (REST API) both call refresh();
+        # the lock makes them take turns instead of interleaving.
+        self._refresh_lock = anyio.Lock()
 
     # --- loading -------------------------------------------------------------
 
@@ -213,6 +216,10 @@ class Registry:
         enables/disables/edits/removes an upstream, right after the DB commit,
         so the tool cache changes immediately instead of up to one interval later.
         """
+        async with self._refresh_lock:
+            await self._refresh()
+
+    async def _refresh(self) -> None:
         await self._load()
         async with anyio.create_task_group() as tg:
             for state in self._states.values():
@@ -252,6 +259,13 @@ class Registry:
                 merged.extend(tool.model_copy(update={"name": naming.prefixed(slug, tool.name)})
                               for tool in state.tools)
         return merged
+
+    def tools_for(self, slug: str) -> list[t.Tool]:
+        """One upstream's cached tools, with gateway (prefixed) names, for the dashboard."""
+        state = self._states.get(slug)
+        if state is None or state.status != "connected":
+            return []
+        return [tool.model_copy(update={"name": naming.prefixed(slug, tool.name)}) for tool in state.tools]
 
     def statuses(self) -> dict[str, tuple[str, str | None]]:
         return {slug: (s.status, s.last_error) for slug, s in self._states.items()}

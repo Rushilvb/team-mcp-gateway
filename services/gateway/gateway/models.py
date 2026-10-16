@@ -37,6 +37,21 @@ class User(Base):
     password_hash: Mapped[str | None] = mapped_column(Text)        # argon2; NULL until the invite is accepted
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
     created_at: Mapped[datetime] = _now()
+    # One-time invite link: only the sha256 of the token is stored (migration 0002).
+    invite_token_hash: Mapped[str | None] = mapped_column(String(64), unique=True)
+    invite_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UserSession(Base):
+    """Dashboard login session (server-side, so logout/disable take effect immediately).
+    The browser holds a random token in an httpOnly cookie; we store only its sha256."""
+    __tablename__ = "user_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_at: Mapped[datetime] = _now()
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ApiKey(Base):

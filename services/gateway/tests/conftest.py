@@ -12,6 +12,7 @@
 """
 
 import asyncio
+import dataclasses
 import json
 import os
 import socket
@@ -39,7 +40,7 @@ from gateway.app import create_app
 from gateway.config import Settings
 from gateway.db import make_engine, make_sessionmaker
 from gateway.models import ApiKey, User
-from gateway.security import new_api_key
+from gateway.security import hash_password, new_api_key
 
 BETA_TOKEN = "beta-secret-token-0123456789"
 SLOW_KEY = "slow-secret-key-0123456789"
@@ -97,7 +98,7 @@ def database_url() -> str:
 async def db(database_url):
     engine = make_engine(database_url)
     async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE audit_log, api_keys, upstream_servers, users RESTART IDENTITY CASCADE"))
+        await conn.execute(text("TRUNCATE audit_log, api_keys, user_sessions, upstream_servers, users RESTART IDENTITY CASCADE"))
     yield make_sessionmaker(engine)
     await engine.dispose()
 
@@ -283,3 +284,31 @@ async def wait_until(predicate, timeout: float = 5.0, interval: float = 0.1):
         if time.monotonic() > deadline:
             raise AssertionError("condition not met in time")
         await asyncio.sleep(interval)
+
+
+@pytest.fixture
+def quiet_gateway(db, gateway_settings, upstreams):
+    """Gateway whose health loop effectively never runs (60s): any tool-list
+    change seen in a test must come from the API's immediate refresh."""
+    server = start_gateway(dataclasses.replace(gateway_settings, health_interval_seconds=60))
+    yield server
+    server.stop()
+
+
+async def create_user(sm, email: str, role: str = "member", password: str | None = "correct horse battery") -> int:
+    async with sm() as s:
+        user = User(email=email, role=role, status="active",
+                    password_hash=hash_password(password) if password else None)
+        s.add(user)
+        await s.commit()
+        return user.id
+
+
+@asynccontextmanager
+async def api_client(gateway: ThreadServer, email: str | None = None, password: str = "correct horse battery"):
+    """HTTP client for /api that keeps cookies; logged in if `email` is given."""
+    async with httpx2.AsyncClient(base_url=gateway.base, timeout=30) as client:
+        if email:
+            r = await client.post("/api/auth/login", json={"email": email, "password": password})
+            assert r.status_code == 200, r.text
+        yield client

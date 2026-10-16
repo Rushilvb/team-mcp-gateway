@@ -7,3 +7,4 @@ alembic==1.20.0
 asyncpg==0.31.0
 cryptography==50.0.2 # Fernet: upstream credentials encrypted at rest
 argon2-cffi==25.1.0  # password hashing
+email-validator==2.3.0  # EmailStr validation in the REST API

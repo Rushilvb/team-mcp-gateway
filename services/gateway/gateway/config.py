@@ -43,6 +43,10 @@ class Settings:
     # "header_name", "credential_env"}]; the credential itself is read from the
     # env var named by credential_env (which Kubernetes fills from a Secret).
     bootstrap_upstreams: list[dict] = field(default_factory=list)
+    # Dashboard / REST API
+    public_url: str = "http://app.localtest.me"   # base of invite links; also the only allowed Origin for writes
+    cookie_secure: bool = False                    # True in prod (HTTPS): browser sends the cookie only over TLS
+    session_hours: float = 12
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -59,4 +63,7 @@ class Settings:
             ssrf_allowed_hosts=frozenset(h.lower() for h in _csv("SSRF_ALLOWED_HOSTS")),
             mcp_allowed_hosts=_csv("MCP_ALLOWED_HOSTS", "localhost:*,127.0.0.1:*"),
             bootstrap_upstreams=json.loads(os.environ.get("BOOTSTRAP_UPSTREAMS", "[]")),
+            public_url=os.environ.get("PUBLIC_URL", "http://app.localtest.me").rstrip("/"),
+            cookie_secure=os.environ.get("COOKIE_SECURE", "false").lower() == "true",
+            session_hours=float(os.environ.get("SESSION_HOURS", "12")),
         )

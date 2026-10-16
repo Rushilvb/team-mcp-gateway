@@ -26,6 +26,17 @@ def hash_api_key(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
 
 
+def new_token() -> tuple[str, str]:
+    """Random URL-safe token + its sha256, for session cookies and invite links.
+    Same reasoning as API keys: 256 random bits, store only the hash."""
+    token = secrets.token_urlsafe(32)
+    return token, hash_token(token)
+
+
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 # Passwords are low-entropy and human-chosen, so they need a slow, salted,
 # memory-hard hash: argon2id (library defaults follow RFC 9106 guidance).
 _hasher = PasswordHasher()
@@ -40,6 +51,11 @@ def verify_password(password_hash: str, password: str) -> bool:
         return _hasher.verify(password_hash, password)
     except (VerificationError, InvalidHashError):
         return False
+
+
+# Verified against when the email is unknown, so a failed login takes the same
+# time whether or not the account exists (no user enumeration by timing).
+DUMMY_PASSWORD_HASH = _hasher.hash("not-a-real-password")
 
 
 class CredentialBox:
