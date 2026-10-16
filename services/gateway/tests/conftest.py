@@ -12,6 +12,7 @@
 """
 
 import asyncio
+import json
 import os
 import socket
 import threading
@@ -31,6 +32,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
 from sqlalchemy import text
 
 from gateway.app import create_app
@@ -146,10 +148,13 @@ class ThreadServer:
 
 
 class RecordingAuth:
-    """Fake upstream auth: records every request's headers, enforces one header."""
+    """Wrapper for fake upstreams: records every request's headers, enforces one
+    credential header, and (legacy_only) behaves like a pre-2026 MCP server."""
 
-    def __init__(self, app, required: tuple[bytes, bytes] | None):
-        self.app, self.required, self.seen = app, required, []
+    def __init__(self, app, required: tuple[bytes, bytes] | None, *, legacy_only: bool = False):
+        self.app, self.required, self.legacy_only = app, required, legacy_only
+        self.seen: list[dict] = []
+        self.rejected_modern = 0
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
@@ -159,10 +164,22 @@ class RecordingAuth:
                 await send({"type": "http.response.start", "status": 401, "headers": []})
                 await send({"type": "http.response.body", "body": b"unauthorized"})
                 return
+            version = headers.get(b"mcp-protocol-version", b"").decode()
+            if self.legacy_only and version and version not in HANDSHAKE_PROTOCOL_VERSIONS:
+                # What an old server answers to a protocol version it doesn't
+                # know (e.g. the client's 2026-07-28 server/discover probe).
+                self.rejected_modern += 1
+                body = json.dumps({"jsonrpc": "2.0", "id": None, "error": {
+                    "code": -32600, "message": f"Bad Request: Unsupported protocol version: {version}"}}).encode()
+                await send({"type": "http.response.start", "status": 400,
+                            "headers": [(b"content-type", b"application/json")]})
+                await send({"type": "http.response.body", "body": body})
+                return
         await self.app(scope, receive, send)
 
 
-def fake_upstream(name: str, required: tuple[bytes, bytes] | None = None, *, slow: bool = False, fail: bool = False):
+def fake_upstream(name: str, required: tuple[bytes, bytes] | None = None, *, slow: bool = False, fail: bool = False,
+                  legacy_only: bool = False):
     server = MCPServer(f"fake-{name}")
 
     @server.tool()
@@ -188,9 +205,11 @@ def fake_upstream(name: str, required: tuple[bytes, bytes] | None = None, *, slo
             await asyncio.sleep(seconds)
             return "rested"
 
-    app = server.streamable_http_app(stateless_http=True, json_response=True,
+    # The legacy fake is session-based (stateful, Mcp-Session-Id, SSE replies),
+    # like servers built on the pre-2026 protocol; the others are stateless JSON.
+    app = server.streamable_http_app(stateless_http=not legacy_only, json_response=not legacy_only,
                                      transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
-    return RecordingAuth(app, required)
+    return RecordingAuth(app, required, legacy_only=legacy_only)
 
 
 @pytest.fixture(scope="session")
@@ -199,6 +218,7 @@ def upstreams():
         "alpha": ThreadServer(fake_upstream("alpha")).start(),
         "beta": ThreadServer(fake_upstream("beta", (b"authorization", f"Bearer {BETA_TOKEN}".encode()), fail=True)).start(),
         "slow": ThreadServer(fake_upstream("slow", (b"x-api-key", SLOW_KEY.encode()), slow=True)).start(),
+        "legacy": ThreadServer(fake_upstream("legacy", legacy_only=True)).start(),
     }
     yield servers
     for s in servers.values():
@@ -210,10 +230,10 @@ async def allow_any_url(url: str) -> None:
 
 
 @pytest.fixture
-def gateway(db, database_url, upstreams, monkeypatch):
+def gateway_settings(database_url, upstreams, monkeypatch) -> Settings:
     monkeypatch.setenv("CRED_BETA", BETA_TOKEN)
     monkeypatch.setenv("CRED_SLOW", SLOW_KEY)
-    settings = Settings(
+    return Settings(
         database_url=database_url,
         fernet_key=Fernet.generate_key().decode(),
         call_timeout_seconds=1,
@@ -225,12 +245,22 @@ def gateway(db, database_url, upstreams, monkeypatch):
             {"slug": "beta", "name": "Beta", "url": f"{upstreams['beta'].base}/mcp", "auth_type": "bearer", "credential_env": "CRED_BETA"},
             {"slug": "slow", "name": "Slow", "url": f"{upstreams['slow'].base}/mcp", "auth_type": "header",
              "header_name": "X-API-Key", "credential_env": "CRED_SLOW"},
+            {"slug": "legacy", "name": "Legacy", "url": f"{upstreams['legacy'].base}/mcp", "auth_type": "none"},
             {"slug": "dead", "name": "Dead", "url": f"http://127.0.0.1:{free_port()}/mcp", "auth_type": "none"},
         ],
     )
+
+
+def start_gateway(settings: Settings) -> ThreadServer:
+    return ThreadServer(create_app(settings, check_url=allow_any_url)).start()
+
+
+@pytest.fixture
+def gateway(db, gateway_settings, upstreams):
     for s in upstreams.values():
         s.app.seen.clear()
-    server = ThreadServer(create_app(settings, check_url=allow_any_url)).start()
+        s.app.rejected_modern = 0
+    server = start_gateway(gateway_settings)
     yield server
     server.stop()
 

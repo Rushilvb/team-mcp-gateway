@@ -207,7 +207,12 @@ class Registry:
             state.last_error = state.conn.scrub(describe(exc))
 
     async def refresh(self) -> None:
-        """Reload config, check every upstream concurrently, persist status, notify on change."""
+        """Reload config, check every upstream concurrently, persist status, notify on change.
+
+        Called by the health loop, and (Phase 5) by every admin action that
+        enables/disables/edits/removes an upstream, right after the DB commit,
+        so the tool cache changes immediately instead of up to one interval later.
+        """
         await self._load()
         async with anyio.create_task_group() as tg:
             for state in self._states.values():

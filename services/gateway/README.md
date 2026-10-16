@@ -44,6 +44,22 @@ collisions impossible, and it tells the model (and the audit log) which server a
 - **Modern clients** (protocol `2026-07-28`) that opened `subscriptions/listen` receive `notifications/tools/list_changed`.
 - **Older clients** (`2025-11-25` and earlier) have no server→client stream in stateless mode, so they see the change when they next call `tools/list`.
 
+## Protocol compatibility
+Upstreams may speak either MCP era:
+- **2026-07-28 (modern):** stateless, self-contained requests. Our woo, notes and fx servers use this.
+- **Pre-2026 (legacy):** an `initialize` handshake and an `Mcp-Session-Id`, which is what most third-party servers still use.
+
+On first contact the client probes `server/discover`. A legacy server rejects the probe, and the client falls back to the handshake.
+`UpstreamConnection` **remembers the era it found**, so later calls and health checks go straight to the right path instead of re-probing each time.
+The connection forgets it on reset, so an upgraded server is re-detected.
+This is tested with a session-based fake upstream that rejects modern requests the way an old server does. The test asserts exactly one probe.
+
+## Bootstrap
+On start the gateway creates the admin from the `gateway-admin` Secret if no user has that email.
+**Upstreams are seeded only into an empty registry** (the very first start). From then on the database
+is the source of truth: a server an admin removed or edited stays that way after restarts and upgrades (tested).
+Deleting *every* upstream and restarting re-seeds the defaults; that's the only "factory reset".
+
 ## Credentials and secrets
 - **Member API keys:** `urk_` + 32 random bytes (base64url). We store only the SHA-256 hash + a 12-char prefix for display, and show the full key once. A fast hash is fine for 256-bit random keys; passwords use argon2id.
 - **Upstream credentials:** encrypted at rest with Fernet. The key is in the `gateway-fernet` Secret, not the DB.
@@ -61,6 +77,15 @@ Runs when an upstream is registered and before every new connection:
 
 The gateway's NetworkPolicy adds a second layer: internet egress is allowed, but private ranges and link-local are excluded.
 
+## Requirements for later phases (recorded so they aren't forgotten)
+- **Phase 5:** every admin action that **enables, disables, edits or removes** an upstream must call
+  `registry.refresh()` right after the DB commit. Then tools appear or disappear (and `list_changed` fires)
+  immediately, instead of up to one health interval later.
+- **Phase 6:** the chat agent calls the gateway's own MCP endpoint at **`http://127.0.0.1:8000/mcp`**,
+  which is the same pod over loopback.
+  - `127.0.0.1:*` and `localhost:*` are already in `MCP_ALLOWED_HOSTS` (verified live: HTTP 200).
+  - The Service name `gateway.platform.svc.cluster.local` is deliberately unusable from inside the pod, because the gateway's NetworkPolicy only admits Traefik (verified: connection refused).
+
 ## Data model (Alembic migration `0001_initial`)
 - **Tables:** `users`, `api_keys`, `upstream_servers` and `audit_log`, as specified in CLAUDE.md, with CHECK constraints for the enum-like columns.
 - **Migrations:** an initContainer runs `alembic upgrade head` before the app starts. A test (`alembic check`) fails if the models and migrations drift apart.
@@ -76,8 +101,8 @@ make gateway-audit                      # latest audit rows
 ```
 
 ## Tests
-`make test` runs 50 gateway tests against a real Postgres. They use small fake upstream MCP servers on
-localhost (a no-auth one, a bearer one, a slow header one and a dead one), the real gateway over HTTP, and a
-real MCP client. Coverage includes prefixing/routing, collisions, timeouts, dead and dying upstreams,
-disabling, `list_changed`, revoked keys, audit attribution, credentials never leaking, the SSRF rules, and
+`make test` runs 53 gateway tests against a real Postgres. They use small fake upstream MCP servers on
+localhost (no-auth, bearer, slow header, session-based legacy, and dead), the real gateway over HTTP, and a
+real MCP client. Coverage includes prefixing/routing, collisions, legacy-protocol upstreams, timeouts, dead and dying upstreams,
+disabling, bootstrap-once, `list_changed`, Host-header protection, revoked keys, audit attribution, credentials never leaking, the SSRF rules, and
 migrations matching the models.

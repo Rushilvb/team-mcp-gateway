@@ -1,7 +1,11 @@
 """First-start setup: the admin user and the default upstream servers.
 
-Idempotent and non-destructive: things are only created if missing, so edits an
-admin makes later (in the dashboard) are never overwritten by a restart.
+Runs on every start but only ever creates things, never updates or deletes:
+- admin: created if no user with that email exists.
+- upstreams: seeded ONLY into an empty registry (first start). After that the
+  database is the source of truth, so a server an admin removed or edited stays
+  that way after a restart. Deleting every upstream and restarting re-seeds the
+  defaults; that is the one way back to factory settings.
 """
 
 import logging
@@ -28,10 +32,11 @@ async def bootstrap(sm: async_sessionmaker, settings: Settings, box: CredentialB
                                  password_hash=hash_password(settings.admin_password)))
                 log.info("bootstrap: created admin %s", settings.admin_email)
 
+        if await session.scalar(select(UpstreamServer.id).limit(1)) is not None:
+            await session.commit()
+            return                                      # registry already initialised: hands off
         for spec in settings.bootstrap_upstreams:      # list order = registration order (woo first)
             slug = spec["slug"]
-            if await session.scalar(select(UpstreamServer.id).where(UpstreamServer.slug == slug)):
-                continue
             if not naming.valid_slug(slug):
                 raise ValueError(f"bootstrap upstream: invalid slug {slug!r}")
             await check_url(spec["url"])

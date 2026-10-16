@@ -159,3 +159,16 @@ One entry per phase: what was built, the key concepts, and the questions an inte
    Within one health interval its check fails (connection refused or timeout). Status becomes `unreachable` with the error stored, and its tools drop out of the cache. So `tools/list` from any client no longer shows them, and modern clients get `list_changed`. Other upstreams are unaffected because checks run concurrently, each with its own timeout. A direct call to its tool returns a clear `upstream 'fx' is unreachable: …` error and is audited. When it comes back, the next check restores it. (Verified by scaling fx-mcp to 0 and back.)
 3. **How do you guarantee members never see upstream credentials, and upstreams never see member keys?**
    Credentials are Fernet-encrypted in the DB, decrypted only in memory into the upstream's own HTTP pool headers, and never serialized into any response (a future REST API returns only "credential set: yes/no"). Error messages are scrubbed of the credential as defense in depth. Member keys are consumed by `McpAuth` and never copied onto upstream requests, because upstream pools are built from upstream config only. Tests assert both directions: fake upstreams record every header they receive (their own credential, never `urk_…`), and every response and error body is scanned for the secrets.
+
+### Phase 4 addendum (review fixes)
+- **Legacy upstreams.** Most third-party MCP servers still speak the pre-2026 protocol (`initialize` handshake + `Mcp-Session-Id`).
+  - The client's `auto` mode probes `server/discover`, and a legacy server rejects it, so the client falls back to the handshake.
+  - We remember the era per upstream, so we don't pay a failed probe on every call.
+  - Tested against a session-based fake that rejects modern requests like an old server; the test asserts exactly one probe.
+- **Bootstrap seeds only an empty registry.** Before, each default was re-added "if missing", so a server an admin deliberately removed would reappear on the next restart. Now the DB is the source of truth after the first start (tested by removing and renaming, then restarting).
+- **Loopback for the chat agent.** `127.0.0.1:*` and `localhost:*` are accepted Host headers.
+  - The Phase 6 agent calls `http://127.0.0.1:8000/mcp` inside the same pod.
+  - Calling itself through its Service name is refused by its own NetworkPolicy (ingress only from Traefik). That's a good example of policies applying even to a pod talking to itself via a Service.
+- **Recorded for Phase 5.** Admin enable/disable/edit/remove must call `registry.refresh()` right after committing, so changes apply immediately rather than on the next health tick.
+
+**Likely question: why remember the protocol era instead of probing every time?** With per-call clients, `auto` mode against a legacy server costs a rejected `server/discover` round trip on *every* call and health check, which is wasted latency and log noise on the upstream. We probe once, cache the result on the connection, and clear it on reset, so an upgraded server gets re-detected.
