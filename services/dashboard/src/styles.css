@@ -39,3 +39,16 @@ table td, table th { font-size: 0.88rem; vertical-align: top; }
 .pager button { width: auto; }
 
 .narrow { max-width: 28rem; }
+
+/* Chat */
+.chat-log { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1rem; }
+.msg { margin: 0; padding: 0.8rem 1rem; max-width: 52rem; }
+.msg-user { align-self: flex-end; background: #eef4ff; }
+.msg-assistant { align-self: flex-start; }
+.msg-text { white-space: pre-wrap; margin-bottom: 0.3rem; }
+.chips { display: flex; flex-direction: column; gap: 0.3rem; }
+.chip { margin: 0; padding: 0.2rem 0.6rem; border-radius: 0.4rem; font-size: 0.85rem; }
+.chip-ok { border-left: 3px solid #198754; }
+.chip-error { border-left: 3px solid #b02a37; }
+.chip pre { margin: 0.2rem 0 0.4rem; font-size: 0.8rem; max-height: 14rem; overflow: auto; }
+.suggestions { margin-bottom: 1rem; }

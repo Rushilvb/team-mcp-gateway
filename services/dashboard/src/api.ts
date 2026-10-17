@@ -117,3 +117,14 @@ export const api = {
 export function formatTime(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString() : "never";
 }
+
+// --- chat (Phase 6) ---
+export interface ChatMessage { role: "user" | "assistant"; text: string }
+export interface ToolCallChip {
+  name: string; arguments: Record<string, unknown>; ok: boolean; result: string | null; error: string | null;
+}
+export interface ChatReply { answer: string; tool_calls: ToolCallChip[]; steps: number; model: string }
+
+export const chatApi = {
+  send: (messages: ChatMessage[]) => request<ChatReply>("POST", "/chat", { messages }),
+};
