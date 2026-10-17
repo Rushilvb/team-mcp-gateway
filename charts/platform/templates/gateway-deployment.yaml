@@ -65,6 +65,20 @@ spec:
               value: {{ printf "%s://%s" (ternary "https" "http" $g.ingress.tls.enabled) $g.publicHost | quote }}
             - name: COOKIE_SECURE
               value: {{ $g.cookieSecure | quote }}
+            # Chat agent. optional: true = the gateway starts without the Secret,
+            # and /api/chat answers 503 "not configured" until `make llm-secret`.
+            - name: GEMINI_API_KEY
+              valueFrom: { secretKeyRef: { name: gateway-llm, key: api-key, optional: true } }
+            - name: GEMINI_MODEL
+              value: {{ $g.chat.model | quote }}
+            - name: CHAT_MAX_STEPS
+              value: {{ $g.chat.maxSteps | quote }}
+            - name: CHAT_TIMEOUT_SECONDS
+              value: {{ $g.chat.timeoutSeconds | quote }}
+            # The agent calls this same pod's /mcp over loopback (the Service
+            # name would be blocked by our own NetworkPolicy: ingress only from Traefik).
+            - name: CHAT_SELF_URL
+              value: "http://127.0.0.1:8000/mcp"
             - name: CALL_TIMEOUT_SECONDS
               value: {{ $g.callTimeoutSeconds | quote }}
             - name: HEALTH_INTERVAL_SECONDS

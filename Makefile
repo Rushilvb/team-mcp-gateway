@@ -19,7 +19,7 @@ IMAGES      := $(foreach s,$(SERVICES),urumi/$(s):$(call tag,$(s)))
 TEST_NET := urumi-test
 TEST_PG  := urumi-test-pg
 
-.PHONY: help prereqs cluster-up status teardown test build load-images lint deploy-local store-admin store-logs mcp-tokens gateway-admin gateway-user gateway-key gateway-keys gateway-revoke gateway-upstreams gateway-audit api-role-check deploy-prod dod-check
+.PHONY: help prereqs cluster-up status teardown test build load-images lint deploy-local store-admin store-logs mcp-tokens gateway-admin gateway-user gateway-key gateway-keys gateway-revoke gateway-upstreams gateway-audit api-role-check llm-secret chat-check deploy-prod dod-check
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -122,6 +122,16 @@ gateway-upstreams: ## Show upstream servers and their status
 
 gateway-audit: ## Show the latest audit log entries
 	$(GW_CLI) audit --limit 30
+
+llm-secret: ## Store your Gemini key in the cluster (reads GEMINI_API_KEY from your shell), restart the gateway
+	@test -n "$$GEMINI_API_KEY" || { echo "Set it first:  export GEMINI_API_KEY=...   (never commit it)"; exit 1; }
+	@kubectl -n platform create secret generic gateway-llm --from-literal=api-key="$$GEMINI_API_KEY" \
+	  --dry-run=client -o yaml | kubectl apply -f -
+	kubectl -n platform rollout restart deploy/gateway
+	kubectl -n platform rollout status deploy/gateway --timeout=120s
+
+chat-check: ## Send one prompt to the chat agent through the real API: PROMPT="..."
+	bash scripts/chat-check.sh "$(PROMPT)"
 
 api-role-check: ## Prove via the real API (through the Ingress) that members are refused admin actions
 	bash scripts/api-role-check.sh

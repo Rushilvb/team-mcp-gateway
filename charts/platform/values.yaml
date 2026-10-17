@@ -110,6 +110,12 @@ gateway:
       authType: header
       headerName: X-API-Key
       credentialSecret: { name: fx-mcp-auth, key: api-key }
+  # Chat agent. The API key is NOT a value: `make llm-secret` creates the
+  # gateway-llm Secret with kubectl, so it never lands in git or Helm history.
+  chat:
+    model: gemini-3.6-flash
+    maxSteps: 8
+    timeoutSeconds: 90
   # Extra cluster-internal hostnames admins may register later (SSRF allowlist).
   extraSsrfAllowedHosts: []
   resources:
