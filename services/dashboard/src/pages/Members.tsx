@@ -1,19 +1,48 @@
-// Admin only: invite members, change roles, enable/disable, see and revoke their keys.
+// Admin only: invite members (or re-issue their link), change roles, enable/disable,
+// see, issue and revoke their API keys.
 import { Fragment, useEffect, useState, type FormEvent } from "react";
 import { api, formatTime, type ApiKey, type Role, type User } from "../api";
 import { useAuth } from "../auth";
 import { Badge, CopyBox, ErrorMessage } from "../components/ui";
 
-function MemberKeys({ user }: { user: User }) {
+function MemberKeys({ user, onChange }: { user: User; onChange: () => void }) {
   const [keys, setKeys] = useState<ApiKey[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [issued, setIssued] = useState<string | null>(null);
   const load = () => { api.userKeys(user.id).then(setKeys).catch((e) => setError(e.message)); };
   useEffect(load, [user.id]);
 
-  if (error) return <ErrorMessage error={error} />;
-  if (!keys) return <p aria-busy="true">Loading keys…</p>;
-  if (keys.length === 0) return <p className="muted"><small>No API keys.</small></p>;
+  async function issue() {
+    setError(null);
+    try {
+      const r = await api.issueKey(user.id, "");
+      setIssued(r.key);           // shown once; hand it to the member securely
+      load();
+      onChange();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  const issueButton = user.status === "active" && (
+    <button className="secondary" onClick={issue}>Issue a key for {user.email}</button>
+  );
+  const issuedBox = issued && (
+    <div className="key-once">
+      <CopyBox value={issued} label={`New key for ${user.email}. Copy it now: it will never be shown again.`} />
+    </div>
+  );
+
+  if (!keys) return error ? <ErrorMessage error={error} /> : <p aria-busy="true">Loading keys…</p>;
+  if (keys.length === 0) return (
+    <>
+      <p className="muted"><small>No API keys.</small></p>
+      {issueButton}{issuedBox}<ErrorMessage error={error} />
+    </>
+  );
   return (
+    <>
+    {issueButton}{issuedBox}<ErrorMessage error={error} />
     <table>
       <thead><tr><th>Key</th><th>Name</th><th>Last used</th><th></th></tr></thead>
       <tbody>
@@ -29,6 +58,7 @@ function MemberKeys({ user }: { user: User }) {
         ))}
       </tbody>
     </table>
+    </>
   );
 }
 
@@ -118,7 +148,7 @@ export default function Members() {
                   </td>
                 </tr>
                 {openKeys === u.id && (
-                  <tr><td colSpan={5}><MemberKeys user={u} /></td></tr>
+                  <tr><td colSpan={5}><MemberKeys user={u} onChange={load} /></td></tr>
                 )}
               </Fragment>
             ))}

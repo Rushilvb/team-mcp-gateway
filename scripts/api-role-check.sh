@@ -46,6 +46,7 @@ PATCH /users/$ADMIN_ID {"role":"member"}
 PATCH /users/$MEMBER_ID {"role":"admin"}
 POST /users/$ADMIN_ID/invite -
 GET /users/$ADMIN_ID/keys -
+POST /users/$MEMBER_ID/keys {"name":"self-issued"}
 POST /servers {"slug":"evil","name":"Evil","url":"https://mcp.example.com/mcp"}
 PATCH /servers/fx {"enabled":false}
 DELETE /servers/fx -

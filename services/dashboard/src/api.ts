@@ -90,6 +90,8 @@ export const api = {
   updateUser: (id: number, change: { role?: Role; status?: "active" | "disabled" }) =>
     request<User>("PATCH", `/users/${id}`, change),
   userKeys: (id: number) => request<ApiKey[]>("GET", `/users/${id}/keys`),
+  issueKey: (id: number, name: string) =>
+    request<{ key: string; item: ApiKey }>("POST", `/users/${id}/keys`, { name }),
 
   // API keys
   myKeys: () => request<ApiKey[]>("GET", "/me/keys"),

@@ -37,7 +37,7 @@ where we fetch data. That's all these pages use: no Redux or other state library
 
 ## Security
 - **CSP and headers** (`nginx.conf`):
-  - `Content-Security-Policy: default-src 'self'` allows no inline scripts and nothing from other origins, so an injected `<script>` can't run.
+  - `Content-Security-Policy: default-src 'self'` allows no inline scripts and nothing from other origins, so an injected `<script>` can't run. Inline styles are allowed (`style-src 'self' 'unsafe-inline'`) so `style="..."` or a library's `<style>` never breaks the page; CSS can't execute code, so that's a small, deliberate trade-off.
   - `frame-ancestors 'none'` and `X-Frame-Options` prevent clickjacking.
   - `nosniff` and `no-referrer` are also set.
 - **No secrets in the browser:**

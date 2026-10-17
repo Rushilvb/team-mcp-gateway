@@ -85,7 +85,7 @@ exactly which fields leave the server, so no hash or credential ever does.
 |---|---|
 | `POST /api/auth/login` · `POST /api/auth/logout` · `GET /api/auth/me` | anyone / logged in |
 | `GET /api/invites/{token}` · `POST /api/invites/{token}/accept` | holder of the invite link |
-| `GET/POST /api/users` · `PATCH /api/users/{id}` · `POST /api/users/{id}/invite` · `GET /api/users/{id}/keys` | admin |
+| `GET/POST /api/users` · `PATCH /api/users/{id}` · `POST /api/users/{id}/invite` (new link, old one dies) · `GET/POST /api/users/{id}/keys` (list / issue a key for a member) | admin |
 | `GET/POST /api/me/keys` · `DELETE /api/keys/{id}` (own; admins: any) | logged in |
 | `GET /api/servers` | logged in (read-only) |
 | `POST /api/servers` · `PATCH/DELETE /api/servers/{slug}` · `POST /api/servers/{slug}/test` | admin |

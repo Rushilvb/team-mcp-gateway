@@ -115,7 +115,7 @@ make gateway-admin     # prints the admin email + password
 | **Servers** | everyone (admins edit) | Status of each upstream (Connected / Unreachable + error / Disabled) and its tools. Admins can add, edit, enable/disable, test and remove servers. Changes apply to every client immediately. |
 | **API keys** | everyone | Create keys (shown once), revoke them, and copy-paste setup for Claude Code / Cursor / Inspector. |
 | **Audit log** | everyone (members: own calls) | Every tool call, filterable by user, server, outcome, channel and date. |
-| **Members** | admins | Invite people (one-time link, no email needed), change roles, disable accounts, revoke anyone's keys. |
+| **Members** | admins | Invite people (one-time link, no email needed; re-issue a lost/expired link), change roles, disable accounts, issue a key on a member's behalf, revoke anyone's keys. |
 | **Chat** | everyone | Phase 6. |
 
 **Inviting a team member:**

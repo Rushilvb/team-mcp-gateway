@@ -117,6 +117,22 @@ async def test_expired_invite_is_rejected(gateway, db):
         assert (await c.post(f"/api/invites/{token}/accept", json={"password": PW})).status_code == 404
 
 
+async def test_reissued_invite_replaces_the_old_link(gateway, db):
+    await create_user(db, "admin@example.com", "admin")
+    async with api_client(gateway, "admin@example.com") as admin:
+        r = await admin.post("/api/users", json={"email": "slow@example.com"})
+        old, uid = r.json()["invite_url"].rsplit("/", 1)[1], r.json()["user"]["id"]
+        r = await admin.post(f"/api/users/{uid}/invite")
+        assert r.status_code == 200
+        new = r.json()["invite_url"].rsplit("/", 1)[1]
+        # Only pending invites can be re-issued.
+        assert (await admin.post("/api/users/1/invite")).status_code == 404
+    assert new != old
+    async with api_client(gateway) as c:
+        assert (await c.get(f"/api/invites/{old}")).status_code == 404        # old link is dead
+        assert (await c.post(f"/api/invites/{new}/accept", json={"password": PW})).status_code == 200
+
+
 # --- roles, enforced by the API ------------------------------------------------------
 
 ADMIN_ONLY = [
@@ -125,6 +141,7 @@ ADMIN_ONLY = [
     ("PATCH", "/api/users/1", {"role": "member"}),
     ("POST", "/api/users/1/invite", None),
     ("GET", "/api/users/1/keys", None),
+    ("POST", "/api/users/1/keys", {"name": "x"}),
     ("POST", "/api/servers", {"slug": "evil", "name": "Evil", "url": "https://mcp.example.com/mcp"}),
     ("PATCH", "/api/servers/alpha", {"enabled": False}),
     ("DELETE", "/api/servers/alpha", None),
@@ -213,6 +230,27 @@ async def test_key_shown_once_and_revocation_applies_to_mcp(gateway, db):
         r = await raw.post("/mcp", headers={"Authorization": f"Bearer {key}", "Accept": "application/json, text/event-stream"},
                            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
     assert r.status_code == 401
+
+
+async def test_admin_issues_key_for_member(gateway, db):
+    await create_user(db, "admin@example.com", "admin")
+    member_id = await create_user(db, "m@example.com")
+    async with api_client(gateway, "admin@example.com") as admin:
+        r = await admin.post(f"/api/users/{member_id}/keys", json={"name": ""})
+        assert r.status_code == 201
+        key, item = r.json()["key"], r.json()["item"]
+        assert item["user_id"] == member_id and item["name"] == "issued by admin@example.com"
+        assert (await admin.post("/api/users/999/keys", json={})).status_code == 404
+        invited = (await admin.post("/api/users", json={"email": "inv@example.com"})).json()["user"]["id"]
+        assert (await admin.post(f"/api/users/{invited}/keys", json={})).status_code == 400   # wouldn't work yet
+    # The key belongs to the member: it works for MCP and calls are audited under the member.
+    async with mcp_client(gateway, key) as client:
+        assert not (await client.call_tool("alpha__echo", {"text": "x"})).is_error
+    async with api_client(gateway, "m@example.com") as m:
+        mine = (await m.get("/api/me/keys")).json()
+        assert [k["prefix"] for k in mine] == [item["prefix"]] and key not in str(mine)
+        audit = (await m.get("/api/audit")).json()
+        assert audit["total"] == 1 and audit["items"][0]["user_id"] == member_id
 
 
 # --- servers -------------------------------------------------------------------------

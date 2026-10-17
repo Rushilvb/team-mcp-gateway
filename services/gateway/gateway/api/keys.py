@@ -44,6 +44,22 @@ async def user_keys(user_id: int, _: AdminDep, session: DB) -> list[KeyOut]:
     return await _keys_of(session, user_id)
 
 
+@router.post("/users/{user_id}/keys", status_code=201)
+async def issue_key(user_id: int, body: KeyCreate, admin: AdminDep, session: DB) -> KeyCreated:
+    """Admin creates a key on a member's behalf (e.g. for a teammate who can't log in yet).
+    The key belongs to the member: their calls are audited under their name."""
+    user = await session.get(User, user_id)
+    if user is None:
+        raise HTTPException(404, "user not found")
+    if user.status != "active":
+        raise HTTPException(400, f"user is {user.status}; their keys would not work")
+    key, prefix, key_hash = new_api_key()
+    row = ApiKey(user_id=user.id, name=body.name or f"issued by {admin.email}"[:100], prefix=prefix, key_hash=key_hash)
+    session.add(row)
+    await session.commit()
+    return KeyCreated(key=key, item=_key_out(row))      # shown once, to the admin, to hand over
+
+
 @router.delete("/keys/{key_id}", status_code=204)
 async def revoke_key(key_id: int, user: UserDep, session: DB) -> None:
     key = await session.get(ApiKey, key_id)

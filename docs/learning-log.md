@@ -216,3 +216,14 @@ One entry per phase: what was built, the key concepts, and the questions an inte
    Immediate revocation and less to get wrong. Logout deletes the row, and disabling a user or demoting an admin applies on their next click. A JWT stays valid until expiry unless you add a denylist, which is a DB lookup per request anyway. With one gateway replica and Postgres already in place, a sessions table is the simplest correct design. The token is stored hashed, like API keys, so a DB leak doesn't hand out live sessions.
 3. **Walk me through what happens when an admin disables the fx server in the dashboard.**
    `Servers.tsx` calls `api.updateServer("fx", {enabled:false})`, which sends `PATCH /api/servers/fx` with the session cookie. Traefik routes `/api` to the gateway, where the Origin check runs and `require_admin` passes. The route sets `enabled=false`, commits, then awaits `registry.refresh()` (under a lock shared with the health loop). The refresh drops fx's pool and tool cache and publishes `list_changed`. The response returns the new state, so every MCP client's next `tools/list` lacks `fx__*` (measured 0.06s after the click) and a direct call returns `upstream 'fx' is disabled` (audited as `denied`).
+
+### Phase 5 addendum (review)
+- **Admin-issued keys**: `POST /api/users/{id}/keys` plus an "Issue a key" button under a member's keys.
+  - The key belongs to the member, so their calls are audited under their name, and it's shown once to the admin to hand over.
+  - Refused for invited or disabled users, because their keys wouldn't work.
+  - Tested, live-checked, and added to `api-role-check`: a member calling it for themselves gets 403.
+- **CSP and inline styles**: `style-src 'self' 'unsafe-inline'`, so inline styles can't break the UI. `script-src` stays strict.
+  - Why allowing inline *styles* is fine: XSS is about running script, and CSS can't execute code. At worst, injected CSS could restyle the page, which matters little in an app that renders no third-party HTML.
+- **Re-issue invite**: `POST /api/users/{id}/invite` replaces the hash, so the old link dies (now tested).
+
+**Likely question: why let admins create keys for others; doesn't that break "show once, only the owner knows it"?** The key is still shown exactly once and stored only hashed. It's for onboarding (a teammate's CI job, or someone without dashboard access yet). Accountability is preserved: the key is owned by the member (audit attribution) and its default name records which admin issued it. The member can see and revoke it on their own keys page, and so can any admin.
