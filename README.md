@@ -4,7 +4,7 @@ A WooCommerce store on Kubernetes, plus a team MCP gateway: admins register MCP 
 and every team member uses all of their tools through one MCP endpoint and a chat agent.
 The same Helm charts run locally (k3d) and on a VPS (k3s); only values files differ.
 
-> Status: Phase 5 (store, MCP servers, gateway + dashboard at http://app.localtest.me). Sections marked _TODO_ are filled in by later phases.
+> Status: Phase 6 (store, MCP servers, gateway, dashboard and chat agent at http://app.localtest.me). Sections marked _TODO_ are filled in by later phases.
 
 ## Repository layout
 
@@ -116,7 +116,7 @@ make gateway-admin     # prints the admin email + password
 | **API keys** | everyone | Create keys (shown once), revoke them, and copy-paste setup for Claude Code / Cursor / Inspector. |
 | **Audit log** | everyone (members: own calls) | Every tool call, filterable by user, server, outcome, channel and date. |
 | **Members** | admins | Invite people (one-time link, no email needed; re-issue a lost/expired link), change roles, disable accounts, issue a key on a member's behalf, revoke anyone's keys. |
-| **Chat** | everyone | Phase 6. |
+| **Chat** | everyone | Ask the assistant; it uses the tools as you (audited, channel `chat`). |
 
 **Inviting a team member:**
 1. As admin, go to Members, enter the person's email, and click Invite.
@@ -146,7 +146,23 @@ Revoking a key (dashboard, or `make gateway-revoke PREFIX=urk_xxxxxxxx`) takes e
 Every call is recorded in the audit log. Details: [services/gateway/README.md](services/gateway/README.md).
 
 ## Using the chat agent
-_TODO (Phase 6)_
+
+The dashboard's **Chat** page is an assistant (Gemini) that uses the team's tools on your behalf. It
+calls them through the gateway's own `/mcp` as you, so every call is in the audit log under your name with
+channel `chat`. Under each answer, expandable chips show the exact tool calls, arguments and results.
+
+One-time setup (the key is stored as a Kubernetes Secret, never in git or Helm values):
+
+```bash
+export GEMINI_API_KEY=...     # from Google AI Studio
+make llm-secret               # creates the gateway-llm Secret and restarts the gateway
+make chat-check PROMPT="What orders came in today?"   # optional: one prompt via the real API
+```
+
+Try: "Create a product called Test Saree priced 499", "What orders came in today?",
+"List today's orders and convert the total to USD", "Summarize today's orders and save it as a note".
+The model defaults to `gemini-3.6-flash` (`gateway.chat.model` in values). Without a key, Chat says
+"not configured" and everything else works normally.
 
 ## Deploying to a VPS (k3s)
 _TODO (Phase 8)_

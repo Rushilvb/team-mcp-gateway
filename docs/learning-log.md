@@ -227,3 +227,48 @@ One entry per phase: what was built, the key concepts, and the questions an inte
 - **Re-issue invite**: `POST /api/users/{id}/invite` replaces the hash, so the old link dies (now tested).
 
 **Likely question: why let admins create keys for others; doesn't that break "show once, only the owner knows it"?** The key is still shown exactly once and stored only hashed. It's for onboarding (a teammate's CI job, or someone without dashboard access yet). Accountability is preserved: the key is owned by the member (audit attribution) and its default name records which admin issued it. The member can see and revoke it on their own keys page, and so can any admin.
+
+---
+
+## Phase 6: Chat agent
+
+### What was built
+- **`gateway/chat/`:**
+  - `token.py`: short-lived HMAC chat tokens.
+  - `llm.py`: the `LLMProvider` interface and `GeminiProvider` (`google-genai` 2.28.0).
+  - `agent.py`: the tool loop and system prompt.
+- **`POST /api/chat`** (stateless: the browser sends the visible conversation).
+- `auth.py` accepts `urc_` chat tokens → `Principal(channel="chat")`.
+- **Dashboard Chat page:** message list, suggested prompts, expandable tool-call chips.
+- **Chart:** chat env, with `GEMINI_API_KEY` from an *optional* Secret.
+- **Makefile:** `make llm-secret` (kubectl-created Secret) and `make chat-check`.
+- **Tests:** 11 chat tests with a scripted fake LLM driving the real loop through the real gateway (88 gateway tests total).
+
+### Key concepts
+- **Tool calling** (function calling): we send the model the tool list (names, descriptions, JSON Schemas). The model either answers or replies "call X with these arguments". *We* execute the call and send the result back, and the model continues. The model never touches the network; it only proposes calls.
+- **Why the agent calls our own `/mcp`** instead of the registry directly: one enforcement point. Auth, disabled upstreams, timeouts, credential injection and audit all apply identically to Claude Code and to chat, with nothing duplicated or bypassed. We call it over loopback (`127.0.0.1:8000`), because the gateway's NetworkPolicy only admits Traefik, so its own Service name would be refused.
+- **Chat token**: the browser's session cookie must not be sent to `/mcp`, and the user may have no API key. So the gateway mints a 5-minute `urc_` token: user id + expiry, signed with HMAC-SHA256.
+  - Verification is a constant-time signature check, an expiry check, then a DB check that the user is still active.
+  - The signing key is random per process, since only this process mints and verifies.
+- **Provider interface**: `step(system, history, tools) -> Turn`. Swapping Gemini for another LLM is one class. Tests swap in a scripted fake, so they're deterministic, free and offline, while still exercising the real loop, real gateway, real audit and real upstreams.
+- **Prompt injection**: a tool result (e.g. a product description or a note written by someone else) can contain text like "ignore your instructions and…". Mitigations:
+  - **System prompt:** it says tool output is *untrusted data, not instructions*.
+  - **Tools:** the model can only call the user's own tools, through the gateway, with the user's own permissions.
+  - **Visibility:** every call is audited and visible as a chip.
+  - **Limits:** max 8 steps, a 90s budget, and truncated results.
+
+  Prompts alone can't guarantee safety, which is why the hard limits live in code.
+- **Gemini "thought signatures"**: Gemini 3 models attach signatures to their function-call turns and require them back on the next request. We store the model's raw message for the duration of one request and resend it unchanged instead of rebuilding it.
+- **Secrets outside Helm**: values passed to Helm are stored in its release Secret (history). `kubectl create secret ... --dry-run=client -o yaml | kubectl apply -f -` creates or updates the Secret idempotently without that. The pod references it with `optional: true`, so the app degrades gracefully (503) without it.
+
+### Likely interview questions
+1. **How are chat tool calls attributed to the right user?**
+   `POST /api/chat` knows the user from their session cookie. It mints a chat token containing that user's id, signed by the gateway, and the agent uses it as the Bearer credential for its MCP client to `127.0.0.1:8000/mcp`. `McpAuth` verifies the signature and expiry, re-reads the user (must be active), and sets `Principal(user, channel="chat")`. The same audit code that records Claude Code calls records these, so the audit row has the user's id and channel `chat`. Tested end to end with a scripted model.
+2. **What stops the model from doing something it shouldn't?**
+   - **Capabilities:** the model only proposes calls; our code executes them as the user, through the gateway. So it can't exceed the user's access, use disabled upstreams, reach anything that isn't an MCP tool, or see credentials (they never enter its context).
+   - **Hard limits in code:** 8 steps, 90s, truncated results, one chat at a time per user.
+   - **Prompt and visibility:** the system prompt treats tool output as untrusted, and every call is audited and shown to the user as a chip.
+
+   The residual risk is the model being tricked into a *legitimate* action, like changing an order status. That's covered in the threat model (Phase 8).
+3. **Why is the chat stateless on the server?**
+   Less to secure and nothing to clean up: no conversation table, no retention policy for possibly sensitive text. The browser sends the visible conversation (text only) each turn, capped at 40 messages × 8,000 chars. What matters for accountability (the tool calls) is already in the audit log.
