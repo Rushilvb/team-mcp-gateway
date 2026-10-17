@@ -3,9 +3,9 @@ Origin check; roles are enforced per route through deps.UserDep / deps.AdminDep.
 
 from fastapi import APIRouter, Depends
 
-from . import audit, keys, login, servers, users
+from . import audit, chat, keys, login, servers, users
 from .deps import check_origin
 
 router = APIRouter(prefix="/api", dependencies=[Depends(check_origin)])
-for module in (login, users, keys, servers, audit):
+for module in (login, users, keys, servers, audit, chat):
     router.include_router(module.router)

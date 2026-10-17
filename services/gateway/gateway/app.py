@@ -16,6 +16,8 @@ from .api import router as api_router
 from .api.deps import LoginLimiter
 from .audit import Audit
 from .auth import Authenticator, McpAuth
+from .chat import token as chat_token
+from .chat.llm import GeminiProvider, LLMProvider
 from .bootstrap import bootstrap
 from .config import Settings
 from .db import make_engine, make_sessionmaker, wait_for_db
@@ -28,7 +30,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logging.getLogger("httpx2").setLevel(logging.WARNING)   # otherwise one line per health-check request
 
 
-def create_app(settings: Settings | None = None, check_url: UrlCheck | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, check_url: UrlCheck | None = None,
+               llm: LLMProvider | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     # Tests inject a permissive URL check so fake upstreams can run on localhost.
     check_url = check_url or functools.partial(check_upstream_url, allowlist=settings.ssrf_allowed_hosts)
@@ -70,6 +73,12 @@ def create_app(settings: Settings | None = None, check_url: UrlCheck | None = No
     # Shared objects the REST API routes reach through request.app.state.
     app.state.settings, app.state.sessionmaker, app.state.registry, app.state.audit = settings, sm, registry, audit
     app.state.box, app.state.check_url, app.state.login_limiter = box, check_url, LoginLimiter()
+    # Chat agent: the provider (tests inject a scripted one; otherwise Gemini if a
+    # key is configured, else chat answers 503), the key that signs chat tokens
+    # (random per process, see chat/token.py), and users with a chat in progress.
+    if llm is None and settings.gemini_api_key:
+        llm = GeminiProvider(settings.gemini_api_key, settings.gemini_model)
+    app.state.llm, app.state.chat_key, app.state.chat_busy = llm, chat_token.new_key(), set()
     app.include_router(api_router)
 
     @app.get("/healthz", include_in_schema=False)
@@ -80,5 +89,5 @@ def create_app(settings: Settings | None = None, check_url: UrlCheck | None = No
     # (Mounting the SDK's whole sub-app under /mcp would make POST /mcp
     # redirect to /mcp/, which MCP clients don't follow.)
     sdk_endpoint = next(r.endpoint for r in mcp_app.routes if getattr(r, "path", None) == "/mcp")
-    app.router.routes.append(Route("/mcp", endpoint=McpAuth(sdk_endpoint, Authenticator(sm), audit)))
+    app.router.routes.append(Route("/mcp", endpoint=McpAuth(sdk_endpoint, Authenticator(sm, app.state.chat_key), audit)))
     return app

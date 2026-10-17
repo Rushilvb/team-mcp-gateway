@@ -47,6 +47,14 @@ class Settings:
     public_url: str = "http://app.localtest.me"   # base of invite links; also the only allowed Origin for writes
     cookie_secure: bool = False                    # True in prod (HTTPS): browser sends the cookie only over TLS
     session_hours: float = 12
+    # Chat agent (Phase 6)
+    gemini_api_key: str | None = None             # from the optional gateway-llm Secret; None = chat disabled
+    gemini_model: str = "gemini-3.6-flash"
+    chat_max_steps: int = 8
+    chat_timeout_seconds: float = 90
+    # The agent calls the gateway's own /mcp over loopback (same pod), so it goes
+    # through the same auth/routing/audit path as any client.
+    chat_self_url: str = "http://127.0.0.1:8000/mcp"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -66,4 +74,9 @@ class Settings:
             public_url=os.environ.get("PUBLIC_URL", "http://app.localtest.me").rstrip("/"),
             cookie_secure=os.environ.get("COOKIE_SECURE", "false").lower() == "true",
             session_hours=float(os.environ.get("SESSION_HOURS", "12")),
+            gemini_api_key=os.environ.get("GEMINI_API_KEY") or None,
+            gemini_model=os.environ.get("GEMINI_MODEL", "gemini-3.6-flash"),
+            chat_max_steps=int(os.environ.get("CHAT_MAX_STEPS", "8")),
+            chat_timeout_seconds=float(os.environ.get("CHAT_TIMEOUT_SECONDS", "90")),
+            chat_self_url=os.environ.get("CHAT_SELF_URL", "http://127.0.0.1:8000/mcp"),
         )

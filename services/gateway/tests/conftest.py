@@ -252,8 +252,11 @@ def gateway_settings(database_url, upstreams, monkeypatch) -> Settings:
     )
 
 
-def start_gateway(settings: Settings) -> ThreadServer:
-    return ThreadServer(create_app(settings, check_url=allow_any_url)).start()
+def start_gateway(settings: Settings, llm=None) -> ThreadServer:
+    # Pick the port first: the chat agent calls the gateway's own /mcp on it.
+    port = free_port()
+    settings = dataclasses.replace(settings, chat_self_url=f"http://127.0.0.1:{port}/mcp")
+    return ThreadServer(create_app(settings, check_url=allow_any_url, llm=llm), port=port).start()
 
 
 @pytest.fixture
@@ -312,3 +315,43 @@ async def api_client(gateway: ThreadServer, email: str | None = None, password: 
             r = await client.post("/api/auth/login", json={"email": email, "password": password})
             assert r.status_code == 200, r.text
         yield client
+
+
+class ScriptedProvider:
+    """A fake LLM for chat tests: plays back the given turns in order (a turn
+    may be a function of the history, to react to tool results) and records
+    what it was shown. After the script ends it answers "done"."""
+    model = "scripted"
+
+    def __init__(self, *turns, delay: float = 0):
+        self.turns, self.delay = list(turns), delay
+        self.histories: list[list[dict]] = []
+        self.tool_names: list[list[str]] = []
+        self.systems: list[str] = []
+
+    async def step(self, system, history, tools):
+        from gateway.chat.llm import Turn
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        self.systems.append(system)
+        self.histories.append([dict(h) for h in history])
+        self.tool_names.append([t.name for t in tools])
+        turn = self.turns.pop(0) if self.turns else Turn(text="done")
+        return turn(history) if callable(turn) else turn
+
+
+@pytest.fixture
+def chat_gateway(db, gateway_settings, upstreams):
+    """Factory: start a gateway whose chat agent uses the given provider."""
+    started = []
+
+    def start(provider):
+        for s in upstreams.values():
+            s.app.seen.clear()
+        server = start_gateway(gateway_settings, llm=provider)
+        started.append(server)
+        return server
+
+    yield start
+    for server in started:
+        server.stop()

@@ -3,7 +3,7 @@
 One MCP endpoint (`/mcp`, Streamable HTTP) that exposes the tools of every registered upstream MCP server.
 Each team member authenticates with **their own API key**. The gateway calls each upstream with **that
 upstream's own credential**, applies timeouts, isolates failures, and writes an audit row for every tool call.
-It also serves the REST API for the dashboard (`/api`, see below). The chat agent arrives in Phase 6.
+It also serves the REST API for the dashboard (`/api`) and the chat agent (`/api/chat`); see below.
 
 ```
 client (Claude Code / Cursor / Inspector)            gateway (namespace platform)                   upstreams
@@ -110,10 +110,38 @@ exactly which fields leave the server, so no hash or credential ever does.
   - Every change awaits `registry.refresh()` before responding, so tools appear or disappear for every client immediately. A lock keeps that from interleaving with the health loop.
 - **Proof:** `make api-role-check` logs in as a throwaway member through the real Ingress and asserts 403 on every admin endpoint. `tests/test_api.py` covers the same and more.
 
+## Chat agent (`gateway/chat/`, `POST /api/chat`)
+```
+browser ─ POST /api/chat (session cookie) ─► gateway ─ mint urc_ token for THIS user (5 min)
+                                               │
+                                               ├─► MCP client ─► http://127.0.0.1:8000/mcp  (same pod, Bearer urc_...)
+                                               │        └─► McpAuth: chat token → Principal(channel="chat") → route → upstream → audit
+                                               └─► LLM (Gemini): history + tools → tool calls / final answer   (loop ≤ 8 steps)
+```
+- **Same path as any client.**
+  - The agent is an MCP *client of our own `/mcp`*, so its calls get the same auth, routing, timeouts, credential injection, `list_changed` and audit as Claude Code would.
+  - They're attributed to the logged-in user with channel `chat`.
+  - Disabled upstreams aren't even offered to the model, and calling one anyway is `denied`.
+- **Chat token** (`chat/token.py`): `urc_<payload>.<HMAC-SHA256>`, carrying the user id and a 5-minute expiry.
+  - It's signed with a random key generated at startup, which works because only this process mints and checks them. Several replicas would need a shared key in a Secret.
+  - The user is re-read on every request, so disabling them stops their chat immediately.
+  - It's not accepted by the REST API (which uses cookies).
+- **Provider interface** (`chat/llm.py`): `LLMProvider.step(system, history, tools) -> Turn`.
+  - `GeminiProvider` (`google-genai`) passes MCP input schemas through as `parameters_json_schema` and disables the SDK's automatic function calling, so we run the loop.
+  - It sends Gemini's own model turns back unchanged (thought signatures).
+  - Tests use a scripted fake.
+- **Safety:**
+  - The system prompt says tool outputs and descriptions are *untrusted data, not instructions*, and never to reveal credentials.
+  - Tool results are truncated (8 KB to the model, 500 chars to the UI).
+  - Max 8 steps, a 90s budget, and one running chat per user (429).
+  - Provider errors → 502 with the provider's message. No key → 503.
+- **Stateless:** the browser sends the visible conversation each time. No chat history is stored, only the audit rows of the tool calls.
+- **Key handling:** `make llm-secret` creates the `gateway-llm` Secret with kubectl from `$GEMINI_API_KEY`, so it never lands in git, values files or Helm's release history. The Deployment references it `optional: true`.
+
 ## Requirements for later phases (recorded so they aren't forgotten)
 - **Phase 5 (done):** enable/disable/edit/remove refresh the tool cache before the API responds. Tested with a
   60s health interval, and verified live: fx tools gone 0.06s after disabling.
-- **Phase 6:** the chat agent calls the gateway's own MCP endpoint at **`http://127.0.0.1:8000/mcp`**,
+- **Phase 6 (done):** the chat agent calls the gateway's own MCP endpoint at **`http://127.0.0.1:8000/mcp`**,
   which is the same pod over loopback.
   - `127.0.0.1:*` and `localhost:*` are already in `MCP_ALLOWED_HOSTS` (verified live: HTTP 200).
   - The Service name `gateway.platform.svc.cluster.local` is deliberately unusable from inside the pod, because the gateway's NetworkPolicy only admits Traefik (verified: connection refused).
@@ -133,7 +161,7 @@ make gateway-audit                      # latest audit rows
 ```
 
 ## Tests
-`make test` runs 75 gateway tests (MCP + REST API) against a real Postgres. They use small fake upstream MCP servers on
+`make test` runs 88 gateway tests (MCP, REST API, chat agent with a scripted LLM) against a real Postgres. They use small fake upstream MCP servers on
 localhost (no-auth, bearer, slow header, session-based legacy, and dead), the real gateway over HTTP, and a
 real MCP client. Coverage includes prefixing/routing, collisions, legacy-protocol upstreams, timeouts, dead and dying upstreams,
 disabling, bootstrap-once, `list_changed`, Host-header protection, revoked keys, audit attribution, credentials never leaking, the SSRF rules, and

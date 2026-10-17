@@ -1,12 +1,16 @@
 """Authentication for the /mcp endpoint (pure ASGI wrapper, like Phase 3's RequireHeader).
 
-Every request must carry `Authorization: Bearer urk_...`. The key is hashed and
-looked up on EVERY request (no cache), so a revocation applies to the very next
-call. On success the caller's Principal is put in scope["state"], where the MCP
-handlers read it as ctx.request.state.principal.
+Every request must carry `Authorization: Bearer <credential>`, one of:
+  urk_...  a member's API key (channel "api"): hashed and looked up on EVERY
+           request (no cache), so a revocation applies to the very next call.
+  urc_...  a short-lived chat token minted by the gateway's own chat agent for
+           the logged-in user (channel "chat"), see chat/token.py.
+Either way the user is re-read from the DB and must be active. On success the
+caller's Principal is put in scope["state"], where the MCP handlers read it as
+ctx.request.state.principal.
 
-If a key is recognised but revoked (or its user disabled), and the request was
-a tools/call, we also write a "denied" audit row naming the user and the tool.
+If a credential is recognised but refused (revoked key, disabled user), and the
+request was a tools/call, we also write a "denied" audit row naming the user and the tool.
 """
 
 import json
@@ -18,6 +22,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from . import naming
 from .audit import Audit, Principal, Timer
+from .chat import token as chat_token
 from .models import ApiKey, User
 from .security import KEY_PREFIX, hash_api_key
 
@@ -26,31 +31,51 @@ MAX_BODY_FOR_AUDIT = 64 * 1024
 
 
 class Authenticator:
-    def __init__(self, sessionmaker: async_sessionmaker):
+    def __init__(self, sessionmaker: async_sessionmaker, chat_key: bytes):
         self._sm = sessionmaker
+        self._chat_key = chat_key
 
-    async def authenticate(self, authorization: str) -> tuple[Principal | None, int | None, str]:
-        """Return (principal, user_id_if_known, reason). principal is None when refused."""
+    async def authenticate(self, authorization: str) -> tuple[Principal | None, int | None, str, str]:
+        """Return (principal, user_id_if_known, reason, channel). principal is None when refused."""
         scheme, _, token = authorization.partition(" ")
         token = token.strip()
-        if scheme.lower() != "bearer" or not token.startswith(KEY_PREFIX):
-            return None, None, "missing or malformed bearer token"
+        if scheme.lower() != "bearer":
+            return None, None, "missing or malformed bearer token", "api"
+        if token.startswith(chat_token.PREFIX):
+            return await self._chat(token)
+        if token.startswith(KEY_PREFIX):
+            return await self._api_key(token)
+        return None, None, "missing or malformed bearer token", "api"
+
+    async def _api_key(self, token: str):
         async with self._sm() as session:
             row = (await session.execute(
                 select(ApiKey, User).join(User, ApiKey.user_id == User.id)
                 .where(ApiKey.key_hash == hash_api_key(token))
             )).first()
             if row is None:
-                return None, None, "unknown API key"
+                return None, None, "unknown API key", "api"
             key, user = row
             if key.revoked_at is not None:
-                return None, user.id, "API key revoked"
+                return None, user.id, "API key revoked", "api"
             if user.status != "active":
-                return None, user.id, f"user is {user.status}"
+                return None, user.id, f"user is {user.status}", "api"
             await session.execute(update(ApiKey).where(ApiKey.id == key.id)
                                   .values(last_used_at=datetime.now(timezone.utc)))
             await session.commit()
-            return Principal(user.id, user.email, user.role, "api", key.id), user.id, "ok"
+            return Principal(user.id, user.email, user.role, "api", key.id), user.id, "ok", "api"
+
+    async def _chat(self, token: str):
+        user_id = chat_token.verify(self._chat_key, token)
+        if user_id is None:
+            return None, None, "invalid or expired chat token", "chat"
+        async with self._sm() as session:
+            user = await session.get(User, user_id)
+        if user is None:
+            return None, None, "unknown user", "chat"
+        if user.status != "active":
+            return None, user.id, f"user is {user.status}", "chat"
+        return Principal(user.id, user.email, user.role, "chat"), user.id, "ok", "chat"
 
 
 class McpAuth:
@@ -65,13 +90,13 @@ class McpAuth:
 
         timer = Timer()
         authorization = dict(scope["headers"]).get(b"authorization", b"").decode("latin-1")
-        principal, known_user_id, reason = await self.authenticator.authenticate(authorization)
+        principal, known_user_id, reason, channel = await self.authenticator.authenticate(authorization)
         if principal is not None:
             scope.setdefault("state", {})["principal"] = principal
             return await self.app(scope, receive, send)
 
         if known_user_id is not None:
-            await self._audit_denied(receive, known_user_id, reason, timer)
+            await self._audit_denied(receive, known_user_id, channel, reason, timer)
         body = json.dumps({"error": "unauthorized", "message": reason}).encode()
         await send({"type": "http.response.start", "status": 401, "headers": [
             (b"content-type", b"application/json"),
@@ -80,7 +105,7 @@ class McpAuth:
         ]})
         await send({"type": "http.response.body", "body": body})
 
-    async def _audit_denied(self, receive, user_id: int, reason: str, timer: Timer) -> None:
+    async def _audit_denied(self, receive, user_id: int, channel: str, reason: str, timer: Timer) -> None:
         """Peek at the (small) JSON-RPC body: if it was a tools/call, record who tried what."""
         body = b""
         while True:
@@ -96,5 +121,5 @@ class McpAuth:
             return
         name = str((request.get("params") or {}).get("name", ""))
         parsed = naming.split(name)
-        await self.audit.record(user_id=user_id, channel="api", server_slug=parsed[0] if parsed else None,
+        await self.audit.record(user_id=user_id, channel=channel, server_slug=parsed[0] if parsed else None,
                                 tool=name, timer=timer, outcome="denied", error=reason)
