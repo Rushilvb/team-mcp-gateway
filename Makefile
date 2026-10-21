@@ -19,7 +19,7 @@ IMAGES      := $(foreach s,$(SERVICES),urumi/$(s):$(call tag,$(s)))
 TEST_NET := urumi-test
 TEST_PG  := urumi-test-pg
 
-.PHONY: help prereqs cluster-up status teardown test build load-images lint deploy-local store-admin store-logs mcp-tokens gateway-admin gateway-user gateway-key gateway-keys gateway-revoke gateway-upstreams gateway-audit api-role-check llm-secret chat-check deploy-prod dod-check
+.PHONY: help prereqs cluster-up status teardown test build load-images lint namespaces deploy-local store-admin store-logs mcp-tokens gateway-admin gateway-user gateway-key gateway-keys gateway-revoke gateway-upstreams gateway-audit api-role-check llm-secret chat-check netpol-check security-check deploy-prod dod-check
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -70,10 +70,23 @@ lint: ## Lint both charts (dummy key values: lookup has no cluster during lint)
 	  --set wooMcp.image.tag=lint --set notesMcp.image.tag=lint --set fxMcp.image.tag=lint --set gateway.image.tag=lint --set dashboard.image.tag=lint \
 	  --set wooMcp.store.consumerKey=x --set wooMcp.store.consumerSecret=x
 
-deploy-local: ## Install/upgrade the charts on the local cluster (values-local.yaml)
-	helm upgrade --install store charts/store -n store --create-namespace \
+namespaces: ## Create the namespaces with their Pod Security Admission levels (idempotent)
+	@# platform: every pod meets "restricted" (non-root, seccomp, no capabilities...).
+	@# store: "baseline" is enforced because WordPress needs one CHOWN-only root
+	@# init container (local-path volumes); "restricted" violations are still reported.
+	kubectl create namespace platform --dry-run=client -o yaml | kubectl apply -f -
+	kubectl label namespace platform --overwrite \
+	  pod-security.kubernetes.io/enforce=restricted \
+	  pod-security.kubernetes.io/warn=restricted pod-security.kubernetes.io/audit=restricted
+	kubectl create namespace store --dry-run=client -o yaml | kubectl apply -f -
+	kubectl label namespace store --overwrite \
+	  pod-security.kubernetes.io/enforce=baseline \
+	  pod-security.kubernetes.io/warn=restricted pod-security.kubernetes.io/audit=restricted
+
+deploy-local: namespaces ## Install/upgrade the charts on the local cluster (values-local.yaml)
+	helm upgrade --install store charts/store -n store \
 	  -f charts/store/values-local.yaml --wait --timeout 15m
-	helm upgrade --install platform charts/platform -n platform --create-namespace \
+	helm upgrade --install platform charts/platform -n platform \
 	  -f charts/platform/values-local.yaml \
 	  --set wooMcp.image.tag=$(call tag,woo-mcp) \
 	  --set notesMcp.image.tag=$(call tag,notes-mcp) \
@@ -139,5 +152,11 @@ api-role-check: ## Prove via the real API (through the Ingress) that members are
 deploy-prod: ## helm upgrade --install charts with values-prod.yaml (Phase 8)
 	@echo "deploy-prod: implemented in Phase 8"
 
-dod-check: ## Run the Definition-of-Done script (Phase 7)
-	@echo "dod-check: implemented in Phase 7"
+netpol-check: ## Prove the NetworkPolicies: allowed and blocked connections, with test pods
+	bash scripts/netpol-check.sh
+
+security-check: ## Show every container's security settings + Pod Security Admission results
+	bash scripts/security-check.sh
+
+dod-check: ## Run the Definition-of-Done checklist end to end (two users, revoke, disable, kill, audit)
+	bash scripts/dod-check.sh

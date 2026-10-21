@@ -1,0 +1,11 @@
+# Backstop: deny all ingress to every pod in this namespace unless another
+# policy allows it. Each workload here already has its own explicit policy;
+# this only makes sure a FUTURE pod starts closed rather than open.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  labels: {{- include "platform.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
