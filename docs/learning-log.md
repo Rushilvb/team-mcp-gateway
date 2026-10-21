@@ -335,3 +335,52 @@ One entry per phase: what was built, the key concepts, and the questions an inte
 - **LLM quota, learned the hard way:** the Gemini free tier has a per-minute **and a daily** request cap. After a day of testing, Gemini answered "retry in 65,340 s". The gateway now says "try again in about 18h (the model's daily quota is probably used up)". `dod-check` waits at most 90 s; beyond that, it marks the chat checks SKIPPED with the reason instead of sleeping for hours. For a recording: use a key with billing enabled, or a model with a higher free quota.
 
 **Likely question: what's the difference between deleting a pod and scaling to zero?** A Deployment declares "I want N replicas". Deleting a pod doesn't change N, so the ReplicaSet controller immediately creates a new pod (self-healing); clients see at most a brief blip. Scaling to 0 changes the *desired state* itself, so nothing comes back until you scale up. That's how we simulate a real outage, and it's where the gateway's health loop, `Unreachable` status and failure isolation matter.
+
+---
+
+## Phase 8: Production values, VPS deployment, docs
+
+### What was built
+- **`values-prod.yaml` for both charts:**
+  - HTTPS via cert-manager (Ingress annotation + TLS Secret);
+  - `Secure` cookies and an `https://` `PUBLIC_URL`;
+  - images from GHCR, optional `imagePullSecrets`;
+  - 5Gi volumes and larger resources.
+
+  No real domain, owner or secret is in git: `make deploy-prod DOMAIN=… REGISTRY=…` fills them in.
+- **Makefile:**
+  - `KCTX` (which cluster);
+  - `push` (content-hash tags to GHCR);
+  - `prod-guard` + `deploy-prod` (requires KCTX/DOMAIN/REGISTRY, refuses the local cluster, runs `namespaces` first, `--atomic`);
+  - `cert-manager` (pinned v1.21.2 + a Let's Encrypt `ClusterIssuer` in `deploy/`);
+  - `dod-check NO_CHAT=1`; `APP_URL`/`SHOP_URL` overrides to check the VPS.
+- **README "Deploying to a VPS"** in 10 steps, including **namespaces with Pod Security labels before Helm**, plus upgrades, rollbacks (with the database caveat), backups, and a local vs prod table.
+- **`docs/design.md`, `docs/threat-model.md`, `docs/standout.md`:** factual content; reasoning sections left as `TODO(Rushil)` with points to cover.
+
+### Key concepts
+- **Helm releases and revisions**: every `helm upgrade` stores a numbered revision of the rendered manifests (as a Secret in the namespace).
+  - `helm history` lists them; `helm rollback <rev>` re-applies an old one.
+  - `--atomic` makes an upgrade roll itself back if it doesn't become healthy within `--timeout`.
+  - Content-hash image tags make rollbacks exact, because the old tag still points to the old image.
+- **What rollback does *not* undo**: anything outside Kubernetes objects, notably database schema migrations. Rolling back across a migration means `alembic downgrade` first, while the code that knows the new schema is still running.
+- **TLS termination at the ingress**:
+  - Traefik decrypts HTTPS and forwards plain HTTP inside the cluster, adding `X-Forwarded-Proto: https`.
+  - The WordPress image uses that header to know it's served over HTTPS (correct links, no redirect loops).
+  - The gateway builds `https://` invite links from `PUBLIC_URL`, and only sends the session cookie over HTTPS (`Secure`).
+- **cert-manager + ACME HTTP-01**:
+  - An Ingress annotated with a `ClusterIssuer` gets a `Certificate`.
+  - cert-manager proves domain control by answering Let's Encrypt's challenge at `/.well-known/acme-challenge/…` through a temporary Traefik route.
+  - It stores the cert in the named Secret and renews it automatically.
+  - This is why ports 80 and 443 must be open and DNS must point at the VPS first.
+- **Kube contexts**: one kubeconfig can hold several clusters. `--context`/`--kube-context` pins a command to one. Making `KCTX` mandatory for prod targets (and refusing the local name) turns "deployed to the wrong cluster" into an error message.
+- **Server-side dry run**: `helm upgrade --dry-run=server` sends every rendered object to the real API server for validation and admission (Pod Security included) without persisting anything. It's a cheap pre-flight check for prod values, done here against the local cluster.
+- **Why the Kubernetes API stays closed**: port 6443 open to the internet invites credential stuffing and CVE exploitation. An SSH tunnel gives the same access with SSH's authentication.
+
+### Likely interview questions
+1. **What changes between local and production?** Only values: hostnames, TLS via cert-manager, `Secure` cookies, images from GHCR instead of `k3d image import`, and volume and resource sizes. The charts, NetworkPolicies, Pod Security levels, Secrets strategy and k3s version are identical, so the local `dod-check`, `netpol-check` and `security-check` results transfer to the VPS. We also ran a server-side dry run of the prod values to catch admission problems before any VPS existed.
+2. **A deploy went wrong. How do you roll back?** `--atomic` already undoes an upgrade that never becomes healthy. For a bad but healthy release: `helm history platform -n platform`, then `helm rollback platform <rev>`. The previous content-hash images still exist, so pods return exactly as they were. The exception is the database: if the bad release ran a migration, run `alembic downgrade -1` first (from the new pod, which knows the migration), then roll back. Data loss is covered by `pg_dump`/`mariadb-dump` backups, which are manual here.
+3. **How do the secrets get onto the VPS without being in git?**
+   - Most are generated inside the cluster by Helm on first install and kept across upgrades with `lookup` (DB passwords, Fernet key, upstream tokens, admin password, WooCommerce API key).
+   - The one external secret, the Gemini key, is created with `kubectl` (`make llm-secret`), so it isn't in values files or Helm's release history.
+   - TLS keys are created by cert-manager in the cluster.
+   - Nothing secret ever passes through git or CI.

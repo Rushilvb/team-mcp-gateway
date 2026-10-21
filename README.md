@@ -4,7 +4,7 @@ A WooCommerce store on Kubernetes, plus a team MCP gateway: admins register MCP 
 and every team member uses all of their tools through one MCP endpoint and a chat agent.
 The same Helm charts run locally (k3d) and on a VPS (k3s); only values files differ.
 
-> Status: Phase 7 (everything runs and is hardened; `make dod-check` passes). Sections marked _TODO_ are filled in by later phases.
+> Status: complete (Phases 0-8). Runs locally on k3d and on a k3s VPS with the same charts; `make dod-check` passes.
 
 ## Repository layout
 
@@ -203,5 +203,107 @@ make reset-demo        # asks you to type "reset"; YES=1 skips the prompt
 It refuses to run unless kubectl points at the local `k3d-urumi` cluster.
 
 ## Deploying to a VPS (k3s)
-_TODO (Phase 8)._ The VPS steps will create the namespaces with their Pod Security levels **before** the
-first Helm install (`make namespaces`, which `make deploy-prod` already depends on), just as locally.
+
+The **same charts** run on a single k3s server. Only `values-prod.yaml` differs: real hostnames, HTTPS,
+secure cookies, images from GHCR, bigger volumes and resources. Commands run from WSL in the repo root.
+`KCTX` names the VPS's kube context, and every prod command requires it, so nothing ever lands on the
+wrong cluster by accident.
+
+**1. Server.** Ubuntu 24.04 LTS, 2 vCPU / 4 GB RAM or more. In the firewall, open only **22, 80, 443**.
+Keep 6443 (the Kubernetes API) closed to the internet; we reach it through SSH.
+
+**2. Install k3s, the same version as local:**
+```bash
+ssh root@<vps-ip> 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=v1.36.5+k3s1 sh -'
+```
+k3s includes Traefik, local-path storage and NetworkPolicy enforcement, exactly like k3d locally.
+
+**3. Kubeconfig on your machine, via an SSH tunnel to the API:**
+```bash
+scp root@<vps-ip>:/etc/rancher/k3s/k3s.yaml ~/.kube/vps.yaml
+sed -i 's/: default$/: urumi-vps/' ~/.kube/vps.yaml        # name the cluster/context/user "urumi-vps"
+ssh -fN -L 6443:127.0.0.1:6443 root@<vps-ip>               # keep this tunnel open while deploying
+export KUBECONFIG=~/.kube/config:~/.kube/vps.yaml
+kubectl --context urumi-vps get nodes                       # -> 1 node Ready
+```
+
+**4. DNS.** Create A records for `shop.<domain>` and `app.<domain>` pointing at the VPS IP.
+
+**5. Images to GHCR.** Log in with a GitHub token that has `write:packages`, then build and push.
+The tags are content hashes, so they're immutable.
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u <github-user> --password-stdin
+make build push REGISTRY=ghcr.io/<github-user>
+```
+Then make the five packages public (GitHub → Packages → Settings); they contain no secrets. Alternatively,
+keep them private, create a `ghcr-pull` docker-registry Secret in `platform`, and set `imagePullSecrets` in
+`charts/platform/values-prod.yaml`.
+
+**6. TLS (optional, recommended).** This installs cert-manager v1.21.2 and a Let's Encrypt issuer. The Ingresses already
+ask for certificates (`shop-tls`, `app-tls`), which arrive within a minute or two of the first deploy.
+```bash
+make cert-manager KCTX=urumi-vps EMAIL=you@example.org
+```
+
+**7. Namespaces first, with their Pod Security levels.** `platform` enforces `restricted`. `store` enforces `baseline`,
+and warns on anything below `restricted`. They must exist *before* Helm installs anything, so the very first pod is
+already checked. `deploy-prod` runs this automatically too, but it's the step that matters, so run it explicitly once:
+```bash
+make namespaces KCTX=urumi-vps
+kubectl --context urumi-vps get ns store platform --show-labels   # pod-security.kubernetes.io/... labels
+```
+
+**8. Deploy both charts.** `--atomic`: if anything fails to become Ready, Helm rolls back by itself.
+```bash
+make deploy-prod KCTX=urumi-vps DOMAIN=<domain> REGISTRY=ghcr.io/<github-user>
+```
+This takes about 5 minutes the first time, while the bootstrap Job installs WooCommerce. All passwords and keys are generated
+in the cluster and kept across upgrades.
+
+**9. LLM key and first login:**
+```bash
+export GEMINI_API_KEY=...
+make llm-secret KCTX=urumi-vps
+make gateway-admin KCTX=urumi-vps        # admin email + password
+```
+Open `https://app.<domain>`, log in, and check that Servers shows woo/notes/fx Connected. The store is at `https://shop.<domain>`.
+
+**10. Verify on the VPS.** The checks use the current context, so switch to it first:
+```bash
+kubectl config use-context urumi-vps
+make netpol-check
+APP_URL=https://app.<domain> SHOP_URL=https://shop.<domain> make dod-check
+kubectl config use-context k3d-urumi     # back to local
+```
+
+### Upgrades and rollbacks
+- **Upgrade:** after a code change, run `make build push REGISTRY=…`, then `make deploy-prod …`. Only services whose code
+  changed get a new tag, so only they roll. The gateway's migration initContainer applies any new Alembic migration
+  before the new version starts.
+- **History:** `helm --kube-context urumi-vps history platform -n platform` (same for `store`).
+- **Rollback:** `helm --kube-context urumi-vps rollback platform <revision> -n platform`. The old revision's
+  image tags still exist in GHCR (immutable), so the pods come back exactly as they were.
+- **Caveat: Helm doesn't roll back the database.** If the release you're leaving added an Alembic migration,
+  run the downgrade **first**, while the new code is still running. Then roll back:
+  ```bash
+  kubectl --context urumi-vps -n platform exec deploy/gateway -c gateway -- alembic downgrade -1
+  ```
+- **Backups** (manual; not automated in this project):
+  ```bash
+  kubectl --context urumi-vps -n platform exec postgres-0 -- pg_dumpall -U postgres > platform-$(date +%F).sql
+  ```
+  For the store, use `mariadb-dump` via `kubectl exec store-mariadb-0`, with the root password from the `store-db` Secret.
+
+### Local vs production
+
+| | Local (k3d) | VPS (k3s) |
+|---|---|---|
+| Kubernetes | k3s v1.36.5 in Docker | k3s v1.36.5 native |
+| Hosts | `shop.localtest.me`, `app.localtest.me` | `shop.<domain>`, `app.<domain>` (DNS A records) |
+| TLS | none (http) | Let's Encrypt via cert-manager; Traefik terminates TLS |
+| Session cookie | `Secure` off | `Secure` on (`gateway.cookieSecure`) |
+| Images | `make build load-images` (k3d import) | `make build push` → GHCR, pulled by the node |
+| Volumes | local-path, 2Gi | local-path, 5Gi |
+| Namespaces | `make namespaces` (part of `deploy-local`) | `make namespaces KCTX=…` (part of `deploy-prod`) |
+| Secrets | generated in-cluster; LLM key via `make llm-secret` | same |
+| Everything else | identical charts, NetworkPolicies, Pod Security levels | identical |
