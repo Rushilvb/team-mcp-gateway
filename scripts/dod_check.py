@@ -14,7 +14,8 @@ What it does (each step prints PASS/FAIL/SKIP):
      server's tools, lists today's orders, does a two-upstream flow (woo -> fx)
   5. B's key revoked -> B's next call is rejected
   6. fx disabled -> its tools disappear for MCP clients and the chat agent
-  7. notes-mcp killed -> others keep working, dashboard API shows Unreachable
+  7. notes-mcp pod deleted -> Kubernetes replaces it and it works again (self-healing);
+     then scaled to 0 -> others keep working, dashboard API shows Unreachable
   8. every call above is in the audit log under the right user and channel
   9. the member-vs-admin role check (scripts/api-role-check.sh)
 It leaves an order and a test product behind (like the audit log, they are the
@@ -115,14 +116,26 @@ def tool_names(key: str) -> set[str]:
     return {t["name"] for t in (result or {}).get("tools", [])} if status == 200 else set()
 
 
+MAX_CHAT_WAIT = 90          # seconds; a longer Retry-After means a daily quota, not worth waiting for
+llm_quota_exhausted: str | None = None
+
+
 def chat(user: "Http", text: str):
-    """POST /api/chat; if the model's rate limit was hit (free tiers allow only a
-    few requests per minute), wait as long as the gateway's Retry-After says and retry."""
+    """POST /api/chat; if the model's per-minute rate limit was hit (free tiers allow
+    only a few requests per minute), wait as the gateway's Retry-After says and retry.
+    A long Retry-After (daily quota used up) is not waited for: the chat checks are
+    then reported as SKIPPED with the reason."""
+    global llm_quota_exhausted
+    if llm_quota_exhausted:
+        return 429, {"detail": llm_quota_exhausted}
     for attempt in range(3):
         status, headers, body = user.request("POST", APP + "/api/chat", {"messages": [{"role": "user", "text": text}]})
         if status != 429 or attempt == 2:
             break
         wait = int(headers.get("Retry-After", "30"))
+        if wait > MAX_CHAT_WAIT:
+            llm_quota_exhausted = f"LLM quota exhausted, provider says retry in {wait // 3600}h{wait % 3600 // 60:02d}m"
+            return 429, {"detail": llm_quota_exhausted}
         print(f"        (AI model rate limit; waiting {wait}s as the gateway advises, then retrying)", flush=True)
         time.sleep(wait + 1)
     try:
@@ -200,6 +213,9 @@ def main() -> int:
     chat_ok = status == 200
     if status == 503:
         record("SKIP", "chat steps", "no LLM key configured (make llm-secret)")
+    elif llm_quota_exhausted:
+        chat_ok = False
+        record("SKIP", "chat steps (A creates a product, asks for today's orders)", llm_quota_exhausted)
     else:
         calls = [c["name"] for c in reply.get("tool_calls", [])] if chat_ok else []
         check(chat_ok and "woo__create_product" in calls, "A (chat) creates a product",
@@ -210,9 +226,12 @@ def main() -> int:
         status, reply = chat(user_a,
             "What orders came in today? List each order's number.")
         calls = [c["name"] for c in reply.get("tool_calls", [])] if status == 200 else []
-        check(status == 200 and "woo__list_orders" in calls and order_id is not None and str(order_id) in reply["answer"],
-              "A (chat) asks for today's orders and gets the new order",
-              f"order #{order_id}, tools {calls}" if status == 200 else f"HTTP {status}: {reply.get('detail')}")
+        if llm_quota_exhausted:
+            record("SKIP", "A (chat) asks for today's orders", llm_quota_exhausted)
+        else:
+            check(status == 200 and "woo__list_orders" in calls and order_id is not None and str(order_id) in reply["answer"],
+                  "A (chat) asks for today's orders and gets the new order",
+                  f"order #{order_id}, tools {calls}" if status == 200 else f"HTTP {status}: {reply.get('detail')}")
 
     print("\n== 4. User B uses the MCP endpoint (gateway URL + API key only)")
     names = tool_names(b_key)
@@ -245,9 +264,12 @@ def main() -> int:
         if chat_ok:
             status, reply = chat(user_a, "Convert 100 INR to USD.")
             used = [c["name"] for c in reply.get("tool_calls", []) if c["ok"]] if status == 200 else []
-            check(status == 200 and not any(n.startswith("fx__") for n in used),
-                  "the chat agent no longer has fx tools",
-                  f"successful tool calls: {used}" if status == 200 else f"HTTP {status}: {reply.get('detail')}")
+            if llm_quota_exhausted:
+                record("SKIP", "the chat agent no longer has fx tools", llm_quota_exhausted)
+            else:
+                check(status == 200 and not any(n.startswith("fx__") for n in used),
+                      "the chat agent no longer has fx tools",
+                      f"successful tool calls: {used}" if status == 200 else f"HTTP {status}: {reply.get('detail')}")
     finally:
         # Always restore, even if a check above blew up: never leave fx disabled.
         status, _ = admin.api("PATCH", "/servers/fx", {"enabled": True})
@@ -258,6 +280,24 @@ def main() -> int:
     def notes_status():
         _, servers = admin.api("GET", "/servers")
         return next((s["status"] for s in servers if s["slug"] == "notes"), None) if isinstance(servers, list) else None
+
+    def ready_notes_pods() -> list[str]:
+        out = kubectl("-n", "platform", "get", "pods", "-l", "app.kubernetes.io/name=notes-mcp", "-o",
+                      "jsonpath={range .items[*]}{.metadata.name} {.status.conditions[?(@.type=='Ready')].status} "
+                      "{.metadata.deletionTimestamp}{'\\n'}{end}")
+        return [line.split()[0] for line in out.splitlines()
+                if line.split()[1:2] == ["True"] and len(line.split()) == 2]   # Ready and not terminating
+
+    # 7a. Self-healing: delete the pod; its Deployment notices and starts a replacement.
+    [old_pod] = ready_notes_pods()[:1] or [None]
+    kubectl("-n", "platform", "delete", "pod", old_pod, "--wait=false")
+    new_pods = wait_for(lambda: [p for p in ready_notes_pods() if p != old_pod], 120)
+    check(bool(new_pods), "self-healing: deleted notes-mcp pod is replaced by its Deployment",
+          f"{old_pod} -> {new_pods[0] if new_pods else 'none'}")
+    healed = wait_for(lambda: tool(b_key2, "notes__list_notes", {"limit": 1})[0], 45)
+    check(healed, "notes tools work again through the gateway (no manual action)")
+
+    # 7b. A real outage: no pod at all.
     kubectl("-n", "platform", "scale", "deploy/notes-mcp", "--replicas=0")
     try:
         unreachable = wait_for(lambda: notes_status() == "unreachable", 60)
@@ -275,7 +315,9 @@ def main() -> int:
     _, a_audit = admin.api("GET", f"/audit?user_id={a_id}&limit=200")
     _, b_audit = admin.api("GET", f"/audit?user_id={b_id}&limit=200")
     a_rows, b_rows = a_audit["items"], b_audit["items"]
-    if chat_ok:
+    if llm_quota_exhausted and chat_ok:
+        record("SKIP", "A's calls are audited as A, channel chat", "not all chat steps ran: " + llm_quota_exhausted)
+    elif chat_ok:
         check(a_rows and all(r["channel"] == "chat" and r["user_email"] == a_email for r in a_rows)
               and {"woo__create_product", "woo__list_orders"} <= {r["tool"] for r in a_rows},
               "A's calls are audited as A, channel chat", f"{len(a_rows)} rows")

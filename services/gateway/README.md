@@ -160,6 +160,7 @@ make gateway-key EMAIL=b@example.com    # prints urk_... once
 make gateway-keys / gateway-revoke PREFIX=urk_xxxxxxxx
 make gateway-upstreams                  # status + last error per upstream
 make gateway-audit                      # latest audit rows
+make reset-demo                         # LOCAL only: wipe users (except admin), keys, audit, notes, orders, non-sample products
 ```
 
 ## Tests

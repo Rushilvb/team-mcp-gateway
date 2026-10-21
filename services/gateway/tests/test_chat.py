@@ -289,3 +289,13 @@ async def test_gemini_long_rate_limit_becomes_llm_error():
         await provider.step("sys", [{"role": "user", "text": "hi"}], [])
     assert info.value.status == 429 and info.value.retry_after == 120 and fake.calls == 1
     assert str(info.value) == "Gemini error 429: quota"      # first line only, no stack or links
+
+
+async def test_daily_quota_message_is_readable(chat_gateway, db):
+    # What a free-tier key returns once its daily quota is used up (seen live: 65340s).
+    from gateway.chat.llm import LLMError
+    gw = chat_gateway(ScriptedProvider(failing(LLMError("Gemini error 429: quota", status=429, retry_after=65340))))
+    await create_user(db, "a@example.com")
+    r = await chat(gw, "a@example.com", "hi")
+    assert r.status_code == 429 and r.headers["retry-after"] == "65340"
+    assert "about 18h" in r.json()["detail"] and "daily quota" in r.json()["detail"]

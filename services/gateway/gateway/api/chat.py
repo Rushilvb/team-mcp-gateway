@@ -73,7 +73,9 @@ async def chat(body: ChatIn, user: UserDep, request: Request) -> ChatOut:
         if isinstance(error, LLMError):
             if error.status == 429:
                 wait = int(error.retry_after or 60)
-                raise HTTPException(429, f"the AI model's rate limit was reached; try again in about {wait}s",
+                when = f"{wait}s" if wait < 120 else f"{wait // 60} minutes" if wait < 7200 else \
+                       f"about {wait // 3600}h (the model's daily quota is probably used up)"
+                raise HTTPException(429, f"the AI model's rate limit was reached; try again in {when}",
                                     headers={"Retry-After": str(wait)}) from None
             raise HTTPException(502, str(error)) from None
         if isinstance(error, TimeoutError):
