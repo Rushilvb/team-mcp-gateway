@@ -10,6 +10,9 @@ data:
 {{ .Files.Get "files/bootstrap.sh" | indent 4 }}
   api-key.php: |-
 {{ .Files.Get "files/api-key.php" | indent 4 }}
+  # Used only by `make reset-demo` (templates/reset-demo-job.yaml).
+  reset-demo.sh: |-
+{{ .Files.Get "files/reset-demo.sh" | indent 4 }}
   # One product per line: sku|price|name|description
   products.txt: |
     {{- range .Values.woocommerce.sampleProducts }}

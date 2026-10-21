@@ -1,0 +1,20 @@
+{{- /*
+On-demand "wipe demo data" Job: deletes all orders and every product except the
+sample ones. NOT part of a normal install: it is only rendered with
+--set resetDemo.enabled=true, which `make reset-demo` does (helm template ... |
+kubectl apply) on the local cluster only.
+*/}}
+{{- if .Values.resetDemo.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-reset-demo
+  labels: {{- include "store.labels" . | nindent 4 }}
+    app.kubernetes.io/name: bootstrap
+    app.kubernetes.io/component: reset-demo
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 600
+  template: {{- include "store.wpcliPod" (dict "ctx" $ "script" "reset-demo.sh" "component" "reset-demo") | nindent 4 }}
+{{- end }}

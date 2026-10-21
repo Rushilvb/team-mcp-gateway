@@ -90,3 +90,7 @@ bootstrap:
 # Namespace where woo-mcp (the only in-cluster client of the store's REST API) runs.
 # The store's NetworkPolicy admits it on port 80.
 wooMcpNamespace: platform
+
+# Only `make reset-demo` sets this (to render the one-off wipe Job). Leave false.
+resetDemo:
+  enabled: false

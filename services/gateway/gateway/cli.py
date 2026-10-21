@@ -7,18 +7,20 @@
   python -m gateway.cli upstreams
   python -m gateway.cli set-upstream --slug fx --disable | --enable
   python -m gateway.cli audit [--limit 20]
+  python -m gateway.cli reset-demo     # wipe users (except the bootstrap admin), keys, sessions, audit
 """
 
 import argparse
+import os
 import asyncio
 import sys
 from datetime import datetime, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 
 from .config import database_url_from_env
 from .db import make_engine, make_sessionmaker
-from .models import ApiKey, AuditLog, UpstreamServer, User
+from .models import ApiKey, AuditLog, UpstreamServer, User, UserSession
 from .security import new_api_key
 
 
@@ -81,6 +83,20 @@ async def main(args: argparse.Namespace) -> None:
                     fail(f"no upstream {args.slug}")
                 print(f"{args.slug}: {'enabled' if args.enable else 'disabled'} (applies within one health interval)")
 
+            elif args.cmd == "reset-demo":
+                # Clean slate for recording a demo: only the bootstrap admin survives.
+                admin_email = os.environ.get("GATEWAY_ADMIN_EMAIL")
+                if not admin_email:
+                    fail("GATEWAY_ADMIN_EMAIL is not set; refusing to guess which user to keep")
+                audit_rows = (await s.execute(delete(AuditLog))).rowcount
+                await s.execute(delete(UserSession))
+                keys = (await s.execute(delete(ApiKey))).rowcount
+                users = (await s.execute(delete(User).where(User.email != admin_email))).rowcount
+                await s.execute(update(UpstreamServer).values(enabled=True))
+                await s.commit()
+                print(f"deleted {audit_rows} audit rows, {keys} API keys, {users} users, all sessions; "
+                      f"kept admin {admin_email}; all upstream servers enabled")
+
             elif args.cmd == "audit":
                 rows = (await s.execute(select(AuditLog, User.email).outerjoin(User)
                                         .order_by(AuditLog.id.desc()).limit(args.limit))).all()
@@ -105,6 +121,7 @@ def parser() -> argparse.ArgumentParser:
     g = c.add_mutually_exclusive_group(required=True)
     g.add_argument("--enable", dest="enable", action="store_true"); g.add_argument("--disable", dest="enable", action="store_false")
     c = sub.add_parser("audit"); c.add_argument("--limit", type=int, default=20)
+    sub.add_parser("reset-demo", help="delete all users except the bootstrap admin, keys, sessions, audit")
     return p
 
 

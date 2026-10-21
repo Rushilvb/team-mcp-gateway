@@ -19,7 +19,7 @@ IMAGES      := $(foreach s,$(SERVICES),urumi/$(s):$(call tag,$(s)))
 TEST_NET := urumi-test
 TEST_PG  := urumi-test-pg
 
-.PHONY: help prereqs cluster-up status teardown test build load-images lint namespaces deploy-local store-admin store-logs mcp-tokens gateway-admin gateway-user gateway-key gateway-keys gateway-revoke gateway-upstreams gateway-audit api-role-check llm-secret chat-check netpol-check security-check deploy-prod dod-check
+.PHONY: help prereqs cluster-up status teardown test build load-images lint namespaces deploy-local store-admin store-logs mcp-tokens gateway-admin gateway-user gateway-key gateway-keys gateway-revoke gateway-upstreams gateway-audit api-role-check llm-secret chat-check netpol-check security-check reset-demo deploy-prod dod-check
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -149,7 +149,9 @@ chat-check: ## Send one prompt to the chat agent through the real API: PROMPT=".
 api-role-check: ## Prove via the real API (through the Ingress) that members are refused admin actions
 	bash scripts/api-role-check.sh
 
-deploy-prod: ## helm upgrade --install charts with values-prod.yaml (Phase 8)
+# Namespaces (with their Pod Security levels) must exist before Helm runs, on the
+# VPS too: deploy-prod depends on `namespaces` just like deploy-local.
+deploy-prod: namespaces ## helm upgrade --install charts with values-prod.yaml (Phase 8)
 	@echo "deploy-prod: implemented in Phase 8"
 
 netpol-check: ## Prove the NetworkPolicies: allowed and blocked connections, with test pods
@@ -160,3 +162,6 @@ security-check: ## Show every container's security settings + Pod Security Admis
 
 dod-check: ## Run the Definition-of-Done checklist end to end (two users, revoke, disable, kill, audit)
 	bash scripts/dod-check.sh
+
+reset-demo: ## LOCAL only: wipe users (except admin), keys, audit, notes, orders, non-sample products [YES=1]
+	YES=$(YES) bash scripts/reset-demo.sh
