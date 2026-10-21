@@ -4,4 +4,4 @@
 #   make dod-check
 set -euo pipefail
 cd "$(dirname "$0")/.."
-exec python3 scripts/dod_check.py
+exec python3 scripts/dod_check.py "$@"

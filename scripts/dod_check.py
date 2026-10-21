@@ -24,14 +24,17 @@ evidence) and disables the two test users at the end.
 
 import http.cookiejar
 import json
+import os
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 
-APP = "http://app.localtest.me"
-SHOP = "http://shop.localtest.me"
+# Override for the VPS: APP_URL=https://app.<domain> SHOP_URL=https://shop.<domain>
+APP = os.environ.get("APP_URL", "http://app.localtest.me").rstrip("/")
+SHOP = os.environ.get("SHOP_URL", "http://shop.localtest.me").rstrip("/")
+NO_CHAT = "--no-chat" in sys.argv     # skip the LLM steps entirely (no request reaches the model)
 RUN = str(int(time.time()))
 results: list[tuple[str, str, str]] = []
 
@@ -209,10 +212,13 @@ def main() -> int:
 
     print("\n== 3. User A uses chat")
     product_name = f"DoD Product {RUN}"
-    status, reply = chat(user_a, f"Create a product called {product_name} priced 499.")
+    if NO_CHAT:
+        status, reply = 503, {}
+    else:
+        status, reply = chat(user_a, f"Create a product called {product_name} priced 499.")
     chat_ok = status == 200
     if status == 503:
-        record("SKIP", "chat steps", "no LLM key configured (make llm-secret)")
+        record("SKIP", "chat steps", "--no-chat given" if NO_CHAT else "no LLM key configured (make llm-secret)")
     elif llm_quota_exhausted:
         chat_ok = False
         record("SKIP", "chat steps (A creates a product, asks for today's orders)", llm_quota_exhausted)
@@ -329,7 +335,8 @@ def main() -> int:
           "B's rejected call after revocation is audited as denied")
 
     print("\n== 9. Roles enforced by the API (member vs admin)")
-    role_check = subprocess.run(["bash", "scripts/api-role-check.sh"], capture_output=True, text=True)
+    role_check = subprocess.run(["bash", "scripts/api-role-check.sh"], capture_output=True, text=True,
+                                env={**os.environ, "BASE": APP})
     check(role_check.returncode == 0, "member is refused every admin endpoint (scripts/api-role-check.sh)",
           role_check.stdout.strip().splitlines()[-1] if role_check.stdout else "")
 
