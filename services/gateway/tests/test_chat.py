@@ -1,6 +1,7 @@
 """Chat agent: a scripted fake LLM drives the real tool loop through the real gateway."""
 
 import time
+from types import SimpleNamespace
 
 import anyio
 import httpx2
@@ -218,3 +219,73 @@ def test_gemini_adapter_conversions():
     responses = [p.function_response for p in contents[2].parts]
     assert responses[0].response == {"result": "[]"} and responses[1].response == {"error": "boom"}
     assert contents[1] is turn.raw                                        # model turn sent back unchanged
+
+
+# --- provider failures (found by the DoD run: they used to escape as a 500) -------------------
+
+def failing(error):
+    def turn(history):
+        raise error
+    return turn
+
+
+async def test_provider_error_mid_loop_is_a_clean_502(chat_gateway, db):
+    # Fails AFTER a tool call, i.e. inside the MCP client's task group, where
+    # the error gets wrapped in an ExceptionGroup.
+    from gateway.chat.llm import LLMError
+    gw = chat_gateway(ScriptedProvider(call("alpha__echo", text="x"), failing(LLMError("Gemini error 400: bad request", status=400))))
+    await create_user(db, "a@example.com")
+    r = await chat(gw, "a@example.com", "hi")
+    assert r.status_code == 502 and r.json() == {"detail": "Gemini error 400: bad request"}
+
+
+async def test_provider_rate_limit_is_a_429_with_retry_after(chat_gateway, db):
+    from gateway.chat.llm import LLMError
+    gw = chat_gateway(ScriptedProvider(failing(LLMError("Gemini error 429: quota", status=429, retry_after=44.5))))
+    await create_user(db, "a@example.com")
+    r = await chat(gw, "a@example.com", "hi")
+    assert r.status_code == 429 and r.headers["retry-after"] == "44"
+    assert "rate limit" in r.json()["detail"]
+    r = await chat(gw, "a@example.com", "hi again")          # the per-user lock was released
+    assert r.status_code == 200
+
+
+class FakeModels:
+    """Stands in for client.aio.models: raises the queued errors, then answers."""
+
+    def __init__(self, *errors):
+        self.errors, self.calls = list(errors), 0
+
+    async def generate_content(self, **kwargs):
+        from google.genai import types
+        self.calls += 1
+        if self.errors:
+            raise self.errors.pop(0)
+        return types.GenerateContentResponse(candidates=[types.Candidate(
+            content=types.Content(role="model", parts=[types.Part(text="ok")]))])
+
+
+def quota_error(delay: str):
+    from google.genai import errors
+    return errors.ClientError(429, {"error": {"code": 429, "message": "quota\nmore detail", "status": "RESOURCE_EXHAUSTED",
+                                              "details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo",
+                                                           "retryDelay": delay}]}})
+
+
+async def test_gemini_waits_once_on_a_short_rate_limit():
+    provider = GeminiProvider(api_key="unused", model="m")
+    fake = FakeModels(quota_error("0s"))
+    provider._client = SimpleNamespace(aio=SimpleNamespace(models=fake))   # no network
+    turn = await provider.step("sys", [{"role": "user", "text": "hi"}], [])
+    assert turn.text == "ok" and fake.calls == 2
+
+
+async def test_gemini_long_rate_limit_becomes_llm_error():
+    from gateway.chat.llm import LLMError
+    provider = GeminiProvider(api_key="unused", model="m")
+    fake = FakeModels(quota_error("120s"))
+    provider._client = SimpleNamespace(aio=SimpleNamespace(models=fake))
+    with pytest.raises(LLMError) as info:
+        await provider.step("sys", [{"role": "user", "text": "hi"}], [])
+    assert info.value.status == 429 and info.value.retry_after == 120 and fake.calls == 1
+    assert str(info.value) == "Gemini error 429: quota"      # first line only, no stack or links

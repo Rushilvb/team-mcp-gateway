@@ -130,11 +130,13 @@ browser ─ POST /api/chat (session cookie) ─► gateway ─ mint urc_ token f
   - `GeminiProvider` (`google-genai`) passes MCP input schemas through as `parameters_json_schema` and disables the SDK's automatic function calling, so we run the loop.
   - It sends Gemini's own model turns back unchanged (thought signatures).
   - Tests use a scripted fake.
-- **Safety:**
+- **Safety and failures:**
   - The system prompt says tool outputs and descriptions are *untrusted data, not instructions*, and never to reveal credentials.
   - Tool results are truncated (8 KB to the model, 500 chars to the UI).
   - Max 8 steps, a 90s budget, and one running chat per user (429).
   - Provider errors → 502 with the provider's message. No key → 503.
+  - Provider rate limit: if Gemini says "retry in ≤ 30s" (free tier: ~5 requests/min), the agent waits once and retries. Otherwise → **429 with `Retry-After`**.
+  - The loop runs inside the MCP client's task group, so errors arrive wrapped in an `ExceptionGroup`. The endpoint unwraps them to answer properly (a bug found by `make dod-check`; now tested).
 - **Stateless:** the browser sends the visible conversation each time. No chat history is stored, only the audit rows of the tool calls.
 - **Key handling:** `make llm-secret` creates the `gateway-llm` Secret with kubectl from `$GEMINI_API_KEY`, so it never lands in git, values files or Helm's release history. The Deployment references it `optional: true`.
 
@@ -161,7 +163,7 @@ make gateway-audit                      # latest audit rows
 ```
 
 ## Tests
-`make test` runs 88 gateway tests (MCP, REST API, chat agent with a scripted LLM) against a real Postgres. They use small fake upstream MCP servers on
+`make test` runs 92 gateway tests (MCP, REST API, chat agent with a scripted LLM) against a real Postgres. They use small fake upstream MCP servers on
 localhost (no-auth, bearer, slow header, session-based legacy, and dead), the real gateway over HTTP, and a
 real MCP client. Coverage includes prefixing/routing, collisions, legacy-protocol upstreams, timeouts, dead and dying upstreams,
 disabling, bootstrap-once, `list_changed`, Host-header protection, revoked keys, audit attribution, credentials never leaking, the SSRF rules, and

@@ -17,6 +17,12 @@ from .deps import UserDep
 router = APIRouter(tags=["chat"])
 
 
+def _leaf(exc: BaseException) -> BaseException:
+    while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
+        exc = exc.exceptions[0]
+    return exc
+
+
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant"]
     text: str = Field(min_length=1, max_length=8000)
@@ -60,10 +66,19 @@ async def chat(body: ChatIn, user: UserDep, request: Request) -> ChatOut:
             messages=[m.model_dump() for m in body.messages],
             max_steps=cfg.chat_max_steps,
         )
-    except LLMError as exc:
-        raise HTTPException(502, str(exc))
-    except TimeoutError:
-        raise HTTPException(504, f"the chat agent took longer than {cfg.chat_timeout_seconds:g}s")
+    except BaseException as exc:
+        # The agent runs inside the MCP client's task group, which wraps errors
+        # in an ExceptionGroup; look at the underlying error to answer properly.
+        error = _leaf(exc)
+        if isinstance(error, LLMError):
+            if error.status == 429:
+                wait = int(error.retry_after or 60)
+                raise HTTPException(429, f"the AI model's rate limit was reached; try again in about {wait}s",
+                                    headers={"Retry-After": str(wait)}) from None
+            raise HTTPException(502, str(error)) from None
+        if isinstance(error, TimeoutError):
+            raise HTTPException(504, f"the chat agent took longer than {cfg.chat_timeout_seconds:g}s") from None
+        raise
     finally:
         state.chat_busy.discard(user.id)
     return ChatOut(answer=result.answer, tool_calls=result.tool_calls, steps=result.steps, model=provider.model)

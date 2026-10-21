@@ -17,6 +17,7 @@ function-call parts sent back exactly as it produced them (they carry
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+import anyio
 import mcp.types as t
 
 
@@ -35,7 +36,27 @@ class Turn:
 
 
 class LLMError(Exception):
-    """The provider failed (bad key, quota, unknown model...). Message is safe to show."""
+    """The provider failed (bad key, quota, unknown model...). Message is safe to show.
+    `status` is the provider's HTTP status (429 = rate limited); `retry_after` in seconds if it said."""
+
+    def __init__(self, message: str, status: int | None = None, retry_after: float | None = None):
+        super().__init__(message)
+        self.status = status
+        self.retry_after = retry_after
+
+
+MAX_RETRY_WAIT = 30   # wait this long at most (once) when the provider says "retry in N s"
+
+
+def _retry_after(details) -> float | None:
+    """Gemini puts the delay in error.details[] as {"@type": ".../RetryInfo", "retryDelay": "44s"}."""
+    try:
+        for item in details["error"]["details"]:
+            if item.get("@type", "").endswith("RetryInfo"):
+                return float(str(item["retryDelay"]).rstrip("s"))
+    except (KeyError, TypeError, ValueError):
+        pass
+    return None
 
 
 class LLMProvider(Protocol):
@@ -101,9 +122,18 @@ class GeminiProvider:
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
             temperature=0.2,
         )
-        try:
-            response = await self._client.aio.models.generate_content(
-                model=self.model, contents=self._contents(history), config=config)
-        except errors.APIError as exc:
-            raise LLMError(f"Gemini error {exc.code}: {exc.message}") from exc
-        return self.to_turn(response)
+        for attempt in (1, 2):
+            try:
+                response = await self._client.aio.models.generate_content(
+                    model=self.model, contents=self._contents(history), config=config)
+                return self.to_turn(response)
+            except errors.APIError as exc:
+                delay = _retry_after(exc.details) if exc.code == 429 else None
+                # Rate limited with a short wait (e.g. free tier: a few requests per
+                # minute): wait once and retry, instead of failing the whole chat.
+                if attempt == 1 and delay is not None and delay <= MAX_RETRY_WAIT:
+                    await anyio.sleep(delay + 1)
+                    continue
+                message = (exc.message or "").split("\n")[0][:300]
+                raise LLMError(f"Gemini error {exc.code}: {message}", status=exc.code, retry_after=delay) from exc
+        raise AssertionError("unreachable")
