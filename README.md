@@ -4,7 +4,7 @@ A WooCommerce store on Kubernetes, plus a team MCP gateway: admins register MCP 
 and every team member uses all of their tools through one MCP endpoint and a chat agent.
 The same Helm charts run locally (k3d) and on a VPS (k3s); only values files differ.
 
-> Status: Phase 6 (store, MCP servers, gateway, dashboard and chat agent at http://app.localtest.me). Sections marked _TODO_ are filled in by later phases.
+> Status: Phase 7 (everything runs and is hardened; `make dod-check` passes). Sections marked _TODO_ are filled in by later phases.
 
 ## Repository layout
 
@@ -163,6 +163,29 @@ Try: "Create a product called Test Saree priced 499", "What orders came in today
 "List today's orders and convert the total to USD", "Summarize today's orders and save it as a note".
 The model defaults to `gemini-3.6-flash` (`gateway.chat.model` in values). Without a key, Chat says
 "not configured" and everything else works normally.
+
+## Checking everything
+
+| Command | What it proves |
+|---|---|
+| `make test` | Unit/integration tests of every service (real Postgres, fake upstreams, scripted LLM) + dashboard type-check |
+| `make dod-check` | The whole Definition of Done, live (see below) |
+| `make netpol-check` | NetworkPolicies, with real connections from throwaway pods (e.g. a random pod can't reach woo-mcp) |
+| `make security-check` | Every container's user/capabilities/seccomp, and the API server's verdict against the "restricted" Pod Security Standard |
+| `make api-role-check` | A member is refused every admin endpoint (via the real Ingress) |
+
+`make dod-check` runs the CLAUDE.md Definition of Done end to end:
+- A storefront checkout with Cash on Delivery.
+- Two users invited and onboarded.
+- User A uses chat: creates a product (it shows up on the storefront) and asks for today's orders.
+- User B uses only the gateway URL + an API key: sees every server's tools, lists today's orders, and converts their total to USD (woo + fx).
+- B's key is revoked → rejected.
+- fx disabled → its tools vanish for MCP clients and the chat agent.
+- The notes pod is killed → shown Unreachable while the others keep working.
+- Every call is in the audit log under the right user and channel.
+
+It prints a PASS/FAIL checklist and restores what it changes. Chat steps need the LLM key (`make llm-secret`). On Gemini's free tier, the check waits out the per-minute rate limit when needed.
+What's locked down and why: [docs/hardening.md](docs/hardening.md).
 
 ## Deploying to a VPS (k3s)
 _TODO (Phase 8)_

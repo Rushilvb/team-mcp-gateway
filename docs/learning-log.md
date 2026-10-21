@@ -272,3 +272,54 @@ One entry per phase: what was built, the key concepts, and the questions an inte
    The residual risk is the model being tricked into a *legitimate* action, like changing an order status. That's covered in the threat model (Phase 8).
 3. **Why is the chat stateless on the server?**
    Less to secure and nothing to clean up: no conversation table, no retention policy for possibly sensitive text. The browser sends the visible conversation (text only) each turn, capped at 40 messages × 8,000 chars. What matters for accountability (the tool calls) is already in the audit log.
+
+---
+
+## Phase 7: Hardening + Definition-of-Done check
+
+### What was built
+- **Store NetworkPolicies** (there were none):
+  - `default-deny-ingress`.
+  - WordPress: from Traefik + woo-mcp; out to mariadb, DNS, internet.
+  - MariaDB: from wordpress/bootstrap; no egress.
+  - Bootstrap Job: no ingress; out to mariadb, DNS, internet.
+- **Platform:** a `default-deny-ingress` backstop.
+- **Pod Security Admission:** `make namespaces` creates the namespaces with labels before Helm. platform = `restricted`; store = `baseline` + warn/audit `restricted`.
+- **Store pods:** seccomp RuntimeDefault, no service-account token, WordPress drops ALL capabilities.
+- **Scripts:**
+  - `netpol-check.sh`: 21 live connection checks.
+  - `security-check.sh`: per-container security table + the API server's restricted dry run.
+  - **`dod-check.sh` / `dod_check.py`:** the whole DoD, 24 checks, standard-library Python + kubectl.
+- **`docs/hardening.md`:** the inventory, with deliberate exceptions.
+- **A real bug the DoD run found:** provider errors inside the chat loop escaped as HTTP 500s, because they arrive wrapped in an `ExceptionGroup`. That left a dangling connection which swallowed the next admin request. Now:
+  - Errors are unwrapped.
+  - A Gemini rate limit becomes **429 + Retry-After**, after one automatic wait if the delay is short.
+  - Four new tests cover it (92 gateway tests).
+
+### Key concepts
+- **Default-deny**: a NetworkPolicy with `podSelector: {}` and no ingress rules selects *every* pod and allows nothing in. Other policies then *add* allowed paths: policies are additive (a union), there's no "deny" rule. The backstop protects pods nobody wrote a policy for yet.
+- **Policies are per direction, and both sides must allow.** woo-mcp → WordPress needs woo-mcp's *egress* rule (platform) **and** WordPress's *ingress* rule (store). Cross-namespace rules combine a `namespaceSelector` and a `podSelector` in **one** `from` entry (AND); two separate entries would mean OR.
+- **Pod Security Admission (PSA)**: a built-in admission controller with three standards.
+  - **privileged:** anything goes.
+  - **baseline:** blocks known escalations: privileged pods, hostPath, host networking, extra capabilities beyond a safe set.
+  - **restricted:** additionally requires non-root, seccomp, drop ALL and no privilege escalation.
+
+  Modes: `enforce` (reject the pod), `warn` (warning to the client), `audit` (record in the audit log). A server-side dry run (`kubectl label --dry-run=server ... enforce=restricted`) asks "would the running pods pass?" without changing anything.
+- **seccomp RuntimeDefault**: the container runtime's default syscall filter blocks rarely needed, dangerous syscalls (e.g. kernel module loading). It's a cheap reduction of the kernel attack surface, and `restricted` requires it.
+- **`automountServiceAccountToken: false`**: by default every pod gets a Kubernetes API token mounted. None of our workloads talk to the API, so a compromised pod shouldn't get a credential for it.
+- **Testing in production-like conditions finds what unit tests don't.** The scripted LLM never raised errors, so the ExceptionGroup bug only appeared against a real model with a real quota. The fix came with tests for the exact failure.
+
+### Likely interview questions
+1. **Show me that only the gateway can reach woo-mcp.** `make netpol-check`.
+   - A throwaway busybox pod in `platform` can't open a TCP connection to `woo-mcp:8000` (or notes, fx, postgres): blocked.
+   - An identical pod wearing the label `app.kubernetes.io/name=gateway` connects: proof that it's the policy, not something else.
+   - The caveat to volunteer: policies trust labels, so in production RBAC must restrict who can create pods in `platform`.
+2. **Why is the store namespace only `baseline`, not `restricted`?** WordPress runs as non-root uid 33, but k3s's local-path volumes are root-owned directories, and `fsGroup` doesn't apply to that volume type. One init container runs as root with every capability dropped except CHOWN, and only chowns the volume. `baseline` allows that; `restricted` doesn't. `warn/audit=restricted` keeps the exception visible (`make security-check` lists exactly that one container). With a CSI storage driver that honours `fsGroup`, you'd turn the init container off and enforce `restricted`.
+3. **What does the DoD script actually prove, and what can't it?** It drives the real system through public interfaces:
+   - a Store API checkout;
+   - the REST API as admin and members;
+   - the chat endpoint with the real LLM;
+   - raw MCP JSON-RPC as an external client;
+   - kubectl to kill a pod.
+
+   It checks each DoD item's observable effect, including the audit trail per user and channel. It can't click through the UI or use Claude Code itself; those stay manual demo steps, but they call the same endpoints the script exercises.
