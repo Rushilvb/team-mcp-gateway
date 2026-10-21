@@ -18,11 +18,13 @@ spec:
         app.kubernetes.io/name: wordpress
       # No checksum/secret annotations: see the note in mariadb-statefulset.yaml.
     spec:
+      automountServiceAccountToken: false   # never talks to the Kubernetes API
       securityContext:
         runAsNonRoot: true
         runAsUser: 33           # www-data in the Debian-based image
         runAsGroup: 33
         fsGroup: 33
+        seccompProfile: { type: RuntimeDefault }
         sysctls:
           # Let a non-root process bind port 80. This sysctl is namespaced to
           # the pod and on Kubernetes' "safe" list, so no cluster change needed.
@@ -92,6 +94,8 @@ spec:
           resources: {{- toYaml .Values.wordpress.resources | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
+            # Port 80 works via the namespaced sysctl above, not a capability.
+            capabilities: { drop: ["ALL"] }
       volumes:
         - name: wp-content
           persistentVolumeClaim:

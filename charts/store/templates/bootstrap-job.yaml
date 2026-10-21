@@ -28,11 +28,13 @@ spec:
         app.kubernetes.io/name: bootstrap
     spec:
       restartPolicy: Never
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 33           # www-data in both images, so files on the PVC match the site
         runAsGroup: 33
         fsGroup: 33
+        seccompProfile: { type: RuntimeDefault }
       initContainers:
         - name: copy-core
           image: "{{ .Values.images.wordpress.repository }}:{{ .Values.images.wordpress.tag }}"

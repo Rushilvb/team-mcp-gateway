@@ -49,3 +49,20 @@ Usage: include "store.secretValue" (dict "ctx" $ "secret" "store-db" "key" "pass
 {{- define "store.randHex40" -}}
 {{- randAlphaNum 64 | sha1sum -}}
 {{- end }}
+
+{{/* Egress rules: cluster DNS, and public internet on 80/443 (no private/link-local ranges). */}}
+{{- define "store.egressDnsAndInternet" -}}
+- to:
+    - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      podSelector: { matchLabels: { k8s-app: kube-dns } }
+  ports:
+    - { protocol: UDP, port: 53 }
+    - { protocol: TCP, port: 53 }
+- to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10, 127.0.0.0/8]
+  ports:
+    - { protocol: TCP, port: 443 }
+    - { protocol: TCP, port: 80 }
+{{- end }}

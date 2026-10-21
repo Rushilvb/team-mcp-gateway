@@ -86,3 +86,7 @@ bootstrap:
   resources:
     requests: { cpu: 50m,  memory: 128Mi }
     limits:   { cpu: 500m, memory: 512Mi }
+
+# Namespace where woo-mcp (the only in-cluster client of the store's REST API) runs.
+# The store's NetworkPolicy admits it on port 80.
+wooMcpNamespace: platform

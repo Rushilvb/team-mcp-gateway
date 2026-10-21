@@ -21,11 +21,13 @@ spec:
       # and restart the database for nothing. MariaDB only reads the passwords
       # when it initialises an empty data dir anyway.
     spec:
+      automountServiceAccountToken: false   # never talks to the Kubernetes API
       securityContext:
         runAsNonRoot: true
         runAsUser: 999          # "mysql" user inside the official image
         runAsGroup: 999
         fsGroup: 999            # volume files group-owned by mysql
+        seccompProfile: { type: RuntimeDefault }   # the container runtime's default syscall filter
       containers:
         - name: mariadb
           image: "{{ .Values.images.mariadb.repository }}:{{ .Values.images.mariadb.tag }}"
