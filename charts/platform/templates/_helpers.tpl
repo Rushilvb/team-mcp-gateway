@@ -60,3 +60,10 @@ storageClassName: {{ .Values.storageClass }}
 - name: PGPASSWORD
   valueFrom: { secretKeyRef: { name: postgres-gateway, key: password } }
 {{- end }}
+
+{{/* Pull secrets for our own images (only needed for a PRIVATE registry, e.g. private GHCR packages). */}}
+{{- define "platform.imagePullSecrets" -}}
+{{- with .Values.imagePullSecrets }}
+imagePullSecrets: {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- end }}

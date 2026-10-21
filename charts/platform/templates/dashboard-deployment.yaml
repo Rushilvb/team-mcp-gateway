@@ -17,6 +17,7 @@ spec:
         app.kubernetes.io/name: dashboard
     spec:
       automountServiceAccountToken: false
+      {{- include "platform.imagePullSecrets" . | nindent 6 }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 101            # "nginx" user in the nginx-unprivileged image

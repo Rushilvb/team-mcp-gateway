@@ -131,3 +131,7 @@ dashboard:
   resources:
     requests: { cpu: 10m,  memory: 16Mi }
     limits:   { cpu: 200m, memory: 64Mi }
+
+# Secrets for pulling OUR images from a private registry, e.g. [{name: ghcr-pull}].
+# Empty = public images (local k3d imports, or public GHCR packages; they contain no secrets).
+imagePullSecrets: []

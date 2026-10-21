@@ -1,0 +1,20 @@
+# Let's Encrypt issuer for cert-manager (VPS only; applied by `make cert-manager`).
+# ACME HTTP-01: Let's Encrypt asks for a token at http://<host>/.well-known/acme-challenge/...;
+# cert-manager answers through a temporary Traefik route, proving we control the
+# domain, and stores the certificate in the Secret named by each Ingress
+# (shop-tls, app-tls). Certificates renew automatically before they expire.
+# ACME_EMAIL is substituted by the Makefile (expiry notices go there).
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: ACME_EMAIL
+    privateKeySecretRef:
+      name: letsencrypt-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik

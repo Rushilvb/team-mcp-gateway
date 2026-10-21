@@ -19,6 +19,7 @@ spec:
         checksum/store-api: {{ include (print $.Template.BasePath "/woo-mcp-secret.yaml") . | sha256sum }}
     spec:
       automountServiceAccountToken: false   # never talks to the Kubernetes API
+      {{- include "platform.imagePullSecrets" . | nindent 6 }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
