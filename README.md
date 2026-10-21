@@ -181,11 +181,27 @@ The model defaults to `gemini-3.6-flash` (`gateway.chat.model` in values). Witho
 - User B uses only the gateway URL + an API key: sees every server's tools, lists today's orders, and converts their total to USD (woo + fx).
 - B's key is revoked → rejected.
 - fx disabled → its tools vanish for MCP clients and the chat agent.
-- The notes pod is killed → shown Unreachable while the others keep working.
+- The notes pod is deleted → Kubernetes replaces it and it works again on its own (self-healing).
+- notes is then scaled to 0 → shown Unreachable while the others keep working.
 - Every call is in the audit log under the right user and channel.
 
 It prints a PASS/FAIL checklist and restores what it changes. Chat steps need the LLM key (`make llm-secret`). On Gemini's free tier, the check waits out the per-minute rate limit when needed.
 What's locked down and why: [docs/hardening.md](docs/hardening.md).
 
+### Clean data for a demo recording
+
+Every `dod-check` run adds users, keys, orders, products and audit rows. To start a recording from a clean slate:
+
+```bash
+make reset-demo        # asks you to type "reset"; YES=1 skips the prompt
+```
+
+**Wipes:** all users except the bootstrap admin, all API keys and login sessions, the audit log, all team notes, all WooCommerce orders, and all products except the three samples.
+
+**Keeps:** the admin login, the LLM key Secret (and every other Secret), the upstream servers (all re-enabled), and the store's settings.
+
+It refuses to run unless kubectl points at the local `k3d-urumi` cluster.
+
 ## Deploying to a VPS (k3s)
-_TODO (Phase 8)_
+_TODO (Phase 8)._ The VPS steps will create the namespaces with their Pod Security levels **before** the
+first Helm install (`make namespaces`, which `make deploy-prod` already depends on), just as locally.

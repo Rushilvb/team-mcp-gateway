@@ -323,3 +323,15 @@ One entry per phase: what was built, the key concepts, and the questions an inte
    - kubectl to kill a pod.
 
    It checks each DoD item's observable effect, including the audit trail per user and channel. It can't click through the UI or use Claude Code itself; those stay manual demo steps, but they call the same endpoints the script exercises.
+
+### Phase 7 addendum (review)
+- **Self-healing in `dod-check`:** the notes-mcp pod is *deleted* first. Its Deployment's ReplicaSet notices the missing pod and creates a replacement, and notes tools work again through the gateway with no manual action. Only then is it scaled to 0 (a real outage: nothing to restart) to show Unreachable and isolation.
+- **`make reset-demo`** (local only; refuses unless the kubectl context is `k3d-urumi`; asks you to type `reset`):
+  - **Gateway CLI:** deletes users except the bootstrap admin, plus keys, sessions and audit, and re-enables upstreams.
+  - **Postgres:** truncates notes.
+  - **Store:** a **one-off wp-cli Job** deletes all orders and non-sample products. It's rendered from the same pod template as the bootstrap Job (`_wpcli-pod.tpl`) with `helm template --set resetDemo.enabled=true --show-only templates/reset-demo-job.yaml | kubectl apply -f -`.
+  - **Kept:** Secrets (the LLM key included).
+- **Namespaces on the VPS:** `deploy-prod` depends on `namespaces` (Pod Security labels before the first pod), and the Phase 8 VPS steps will say so.
+- **LLM quota, learned the hard way:** the Gemini free tier has a per-minute **and a daily** request cap. After a day of testing, Gemini answered "retry in 65,340 s". The gateway now says "try again in about 18h (the model's daily quota is probably used up)". `dod-check` waits at most 90 s; beyond that, it marks the chat checks SKIPPED with the reason instead of sleeping for hours. For a recording: use a key with billing enabled, or a model with a higher free quota.
+
+**Likely question: what's the difference between deleting a pod and scaling to zero?** A Deployment declares "I want N replicas". Deleting a pod doesn't change N, so the ReplicaSet controller immediately creates a new pod (self-healing); clients see at most a brief blip. Scaling to 0 changes the *desired state* itself, so nothing comes back until you scale up. That's how we simulate a real outage, and it's where the gateway's health loop, `Unreachable` status and failure isolation matter.
