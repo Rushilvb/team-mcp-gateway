@@ -4,36 +4,49 @@ A WooCommerce store plus a **team MCP gateway** on Kubernetes. Admins register M
 member uses all their tools through **one endpoint with their own API key**, or through a chat agent in the
 dashboard, and every call is audited. The same Helm charts run locally (k3d) and on a VPS (k3s).
 
-> Sections marked **TODO(Rushil)** are the reasoning I'll explain in my own words. The bullets under them are
-> the points to cover, not the answer. Everything else is a factual description of what is built.
-
 ## 1. Architecture
 
+```mermaid
+flowchart TB
+    clients["Browsers and MCP clients<br/>(Claude Code, Cursor, Inspector)"]
+    gemini["Gemini API<br/>(external, HTTPS)"]
+
+    subgraph cluster["k3s cluster"]
+        traefik["Traefik ingress<br/>(TLS termination in prod)"]
+
+        subgraph store["namespace: store"]
+            wp["WordPress + WooCommerce"]
+            mariadb[("MariaDB")]
+        end
+
+        subgraph platform["namespace: platform"]
+            dashboard["dashboard<br/>nginx + React SPA"]
+            gateway["gateway (FastAPI)<br/>REST API · MCP server · chat agent<br/>registry + health loop · audit"]
+            woo["woo-mcp"]
+            notes["notes-mcp"]
+            fx["fx-mcp<br/>rates from a ConfigMap<br/>(no network access)"]
+            postgres[("Postgres<br/>gateway db · notes db")]
+        end
+    end
+
+    clients -->|":80 / :443"| traefik
+    traefik -->|"shop.DOMAIN"| wp
+    traefik -->|"app.DOMAIN /"| dashboard
+    traefik -->|"app.DOMAIN /api, /mcp"| gateway
+    wp --> mariadb
+    woo -->|"REST v3 · OAuth 1.0a · in-cluster HTTP"| wp
+    gateway -->|"MCP · no credential"| woo
+    gateway -->|"MCP · Bearer token"| notes
+    gateway -->|"MCP · X-API-Key"| fx
+    gateway -->|"gateway db"| postgres
+    notes -->|"notes db"| postgres
+    gateway -->|"chat agent's LLM calls"| gemini
 ```
-                           Internet / browser / MCP clients
-                                         │  :80/:443
-                                  ┌──────▼──────┐   k3s Traefik (ingress controller)
-                                  │   Traefik   │   TLS termination in prod (cert-manager)
-                                  └──┬───────┬──┘
-                shop.<domain>        │       │        app.<domain>
-        ┌────────────────────────────┘       └───────────────┬──────────────┬─────────────┐
-        │  namespace: store                                   │ /            │ /api, /mcp  │
- ┌──────▼──────┐   ┌──────────┐            namespace:  ┌──────▼────┐  ┌──────▼──────────────────────────┐
- │  WordPress  ├──►│ MariaDB  │            platform    │ dashboard │  │ gateway (FastAPI)                │
- │ +WooCommerce│   │(StatefulS│                        │ nginx+SPA │  │  REST API · MCP server · chat    │
- └──────▲──────┘   └──────────┘                        └───────────┘  │  registry+health loop · audit    │
-        │ REST v3 (OAuth1, in-cluster http)                            └──┬──────┬───────┬──────┬───────┘
-        │                                                                 │      │       │      │ Gemini (https)
- ┌──────┴──────┐   MCP (Streamable HTTP) + upstream credential            │      │       │      ▼
- │   woo-mcp   │◄─────────────────────────────────────────────────────────┘      │       │
- └─────────────┘                    ┌───────────┐  Bearer token                  │       │
-                                    │ notes-mcp │◄───────────────────────────────┘       │
-                                    └─────┬─────┘                ┌────────┐  X-API-Key   │
-                                          └──────────►┌──────────┤ fx-mcp │◄─────────────┘
-                                                      │ Postgres │└────────┘
-                                                      │ notes db │ (gateway db: users, keys, upstreams, audit, sessions)
-                                                      └──────────┘
-```
+
+Every arrow is a connection a NetworkPolicy allows; anything not drawn is blocked. Only the gateway and
+notes-mcp talk to Postgres, each to its own database with its own role. fx-mcp makes no outgoing
+connections at all, not even DNS. The chat agent reaches the MCP servers by calling the gateway's own `/mcp` over
+`127.0.0.1` inside the gateway pod, so it follows the same arrows as any other client.
 
 | Component | What it is | Where |
 |---|---|---|
