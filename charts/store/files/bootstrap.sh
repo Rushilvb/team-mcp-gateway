@@ -51,6 +51,11 @@ fi
 wp plugin is-active woocommerce || wp plugin activate woocommerce
 wpa wc update                                 # run any pending WooCommerce DB migrations
 wpa wc tool run install_pages >/dev/null      # Shop/Cart/Checkout/My account (skips existing)
+# Home page = the WooCommerce Shop page, so products show at the site root
+# instead of WordPress's default blog front page.
+shop_page="$(wp option get woocommerce_shop_page_id)"
+wp option update show_on_front page
+wp option update page_on_front "$shop_page"
 
 # 5. Store settings ----------------------------------------------------------
 wp option update woocommerce_currency "$STORE_CURRENCY"
