@@ -78,25 +78,13 @@ dashboard, and every call is audited. The same Helm charts run locally (k3d) and
   - The protocol era (2026-07-28 modern vs legacy session-based) is probed once and remembered.
   - The SSRF check re-runs on every (re)connect.
 
-> **TODO(Rushil): rewrite in my words: why one aggregating endpoint**
-> - What a team gets: one URL + one personal key vs N servers × shared secrets on every laptop
-> - Central place for revocation, disabling, audit, SSRF/egress control
-> - Cost: the gateway is a dependency and a single replica here
+**Why one aggregating endpoint.** Without a gateway, every team member would configure every MCP server on their own laptop and keep a copy of each server's secret. With the gateway, a member adds one URL and their own personal key, and gets every enabled server's tools. It also gives one place to control access: revoking a key, disabling a server, auditing every call and blocking dangerous URLs all happen centrally instead of on every laptop. The cost is that the gateway becomes a dependency, so if it's down, nobody can use any tool. Here it runs as a single replica; for production I'd run several (see trade-offs).
 
-> **TODO(Rushil): rewrite in my words: the naming scheme**
-> - Why prefixing beats "first one wins" or renaming on collision
-> - Why `__` + slug without underscores makes parsing unambiguous
-> - The model sees which server a tool belongs to (helps it pick, helps audit)
+**The naming scheme.** When two servers expose the same tool name (both woo and notes have `get_info`), something has to give. "First one wins" silently hides a tool, and renaming on collision (`get_info_2`) makes names depend on which servers happen to be registered. Prefixing every tool with its server's slug, like `woo__get_info`, is stable and predictable. Slugs can only contain lowercase letters, digits and hyphens, never an underscore, so the gateway can always split at the first `__` and know exactly which server and tool are meant. As a bonus, the model and the audit log both see which server a tool belongs to.
 
-> **TODO(Rushil): rewrite in my words: cache-based listing**
-> - `tools/list` never waits on an upstream → a dead upstream can't block or slow listing
-> - Staleness ≤ one health interval; why that's acceptable; immediate refresh on admin changes
-> - `list_changed` for modern clients; older clients re-list
+**Cache-based listing.** `tools/list` is answered from a cache that the health loop refreshes every 15 seconds, so listing never waits on an upstream. If one server is slow or dead, the list still comes back instantly with everyone else's tools. The trade-off is that the list can be up to one interval out of date. That's acceptable, because calling a tool on a server that just died still fails cleanly with a clear error. Admin changes (enable, disable, edit, remove) refresh the cache immediately, so they show up at once. Newer clients are told the list changed through `list_changed`; older clients see it the next time they re-list.
 
-> **TODO(Rushil): rewrite in my words: stateless upstream calls instead of long-lived sessions**
-> - The 2026-07-28 MCP protocol has no session; pool per upstream keeps TCP reuse
-> - Failure isolation per call, nothing shared to corrupt, simpler code
-> - Legacy upstreams still work (era remembered after one probe)
+**Stateless upstream calls.** Each tool call is a self-contained MCP request sent over a long-lived HTTP connection pool, one pool per upstream. The newest MCP protocol has no session, and our servers are stateless, so keeping a long-lived session would only add tricky concurrency code. Because nothing is shared between calls, one failed call can't break another, and a broken connection is simply rebuilt. The pool still reuses TCP connections, so it stays efficient. Older servers that require a session handshake still work: the gateway detects this once and remembers it.
 
 ## 4. Failure handling
 
@@ -118,26 +106,19 @@ dashboard, and every call is audited. The same Helm charts run locally (k3d) and
 - **`audit_log`:** user (`SET NULL` on delete), channel api|chat, server slug, tool, started at, duration ms, outcome success|error|timeout|denied, error message.
 - **`user_sessions`:** user, token SHA-256 (unique), expiry.
 
-> **TODO(Rushil): rewrite in my words: server-side sessions and hashed secrets**
-> - Why sessions in a table instead of JWTs (immediate logout/disable/role change)
-> - Why SHA-256 for keys/session tokens but argon2 for passwords (entropy)
-> - Why upstream credentials are encrypted (reversible) instead of hashed
+**Server-side sessions and hashed secrets.** Dashboard logins use a random token stored as a hash in a sessions table, instead of a JWT. Every request checks that table and the user's current status, so logging out, disabling a user or changing their role takes effect on the very next request; a JWT would stay valid until it expired. API keys and session tokens are long random values, so a fast SHA-256 hash is enough, since nobody can brute-force them. Passwords are chosen by people and can be weak, so they use argon2, which is deliberately slow to make guessing expensive. Upstream credentials are different again: the gateway must send the real value to the upstream, so they're encrypted (reversible, with a key from a Kubernetes Secret) rather than hashed.
 
 ## 6. Local vs production
 Only values files differ (`charts/*/values-local.yaml` vs `values-prod.yaml`): hostnames, TLS via cert-manager,
 `Secure` cookies, image registry (k3d import vs GHCR), volume sizes, resources. Same k3s version, same
 NetworkPolicies, same Pod Security levels, same Secrets strategy. Details: README "Deploying to a VPS".
 
-> **TODO(Rushil): rewrite in my words: why k3d locally and k3s on the VPS**
-> - Same distribution: Traefik, local-path, NetworkPolicy controller behave identically
-> - "Works locally" ≈ "works in prod" with values-only differences
+**Why k3d locally and k3s on the VPS.** k3d runs k3s inside Docker, so locally and on the VPS I run the same Kubernetes distribution at the same version. Traefik, the local-path storage and NetworkPolicy enforcement behave the same in both places. So if it works locally, the only things that change in production are the values files: domain, TLS, image registry and sizes. It also surfaced real problems early, like the volume-ownership bug, which would have appeared on the VPS too.
 
 ## 7. Trade-offs and what I'd do with more time
 
-> **TODO(Rushil): rewrite in my words**
-> - Single gateway replica: in-memory health loop, list_changed bus, login limiter, chat-token key (→ Redis + shared key for HA)
-> - Shared upstream credentials: upstreams can't tell members apart (→ per-user upstream tokens / OAuth on upstreams)
-> - No per-member tool permissions (every member sees every enabled tool) → tool-level RBAC
-> - Gemini free tier quota made chat flaky in testing → billing / provider fallback
-> - Backups are manual; no metrics/tracing yet (OpenTelemetry hooks exist in the MCP SDK)
-> - OAuth for the gateway itself (brief: out of scope)
+- **Single gateway replica.** The health loop, `list_changed` notifications, login rate limiter and chat-token signing key live in one process's memory. To run several replicas, I'd move them to shared storage such as Redis and use a shared signing key from a Secret.
+- **Shared upstream credentials.** Upstreams see the gateway's credential, not which member is calling, so per-member identity exists only in the gateway's audit log. With more time, I'd pass per-user identity upstream (for example, OAuth per user).
+- **No per-member tool permissions.** Every member sees every enabled tool. Tool-level permissions (for example, only admins can create products) are the next feature I'd add.
+- **LLM quota.** The Gemini free tier ran out quickly during testing. In production, I'd use a paid tier with a fallback provider.
+- **Operations.** Backups are manual and there are no metrics yet. I'd add scheduled backups and metrics for calls, errors and latency per server.
