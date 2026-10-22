@@ -162,9 +162,9 @@ def wait_for(predicate, timeout: float, interval: float = 2.0):
 def storefront_order() -> dict | None:
     print("\n== 1. Storefront checkout with Cash on Delivery")
     shop = Http()
-    status, _, text = shop.request("GET", SHOP + "/wp-json/wc/store/v1/products?search=Masala")
+    status, _, text = shop.request("GET", SHOP + "/wp-json/wc/store/v1/products?search=Earbuds")
     products = json.loads(text) if status == 200 else []
-    if not check(bool(products), "storefront lists products", f"{len(products)} match 'Masala'"):
+    if not check(bool(products), "storefront lists products", f"{len(products)} match 'Earbuds'"):
         return None
     status, headers, _ = shop.request("GET", SHOP + "/wp-json/wc/store/v1/cart")
     auth = {"Nonce": headers.get("Nonce", ""), "Cart-Token": headers.get("Cart-Token", "")}

@@ -8,15 +8,15 @@ from conftest import call
 pytestmark = pytest.mark.anyio
 
 PRODUCT = {
-    "id": 11, "name": "Masala Chai Tin", "sku": "CHAI-001", "price": "349", "regular_price": "349",
+    "id": 11, "name": "Wireless Earbuds", "sku": "EARB-001", "price": "349", "regular_price": "349",
     "status": "publish", "stock_status": "instock", "stock_quantity": None,
-    "permalink": "http://shop.localtest.me/product/masala-chai-tin/", "description": "<p>ignored</p>",
+    "permalink": "http://shop.localtest.me/product/wireless-earbuds/", "description": "<p>ignored</p>",
 }
 ORDER = {
     "id": 42, "status": "processing", "date_created": "2026-10-12T00:10:00", "total": "349.00", "currency": "INR",
     "billing": {"first_name": "Asha", "last_name": "Rao", "email": "asha@example.com", "city": "Bengaluru"},
     "payment_method_title": "Cash on delivery", "customer_note": "",
-    "line_items": [{"name": "Masala Chai Tin", "sku": "CHAI-001", "quantity": 1, "total": "349.00"}],
+    "line_items": [{"name": "Wireless Earbuds", "sku": "EARB-001", "quantity": 1, "total": "349.00"}],
 }
 
 
@@ -74,15 +74,15 @@ async def test_woocommerce_error_message_is_passed_through(mcp_client, store):
 
 async def test_list_products_maps_fields_and_passes_filters(mcp_client, store):
     route = store.get("/products").respond(json=[PRODUCT])
-    is_error, result = await call(mcp_client, "list_products", {"search": "chai", "per_page": 5})
+    is_error, result = await call(mcp_client, "list_products", {"search": "earbuds", "per_page": 5})
     assert not is_error
     assert result["products"] == [{
-        "id": 11, "name": "Masala Chai Tin", "sku": "CHAI-001", "price": "349", "regular_price": "349",
+        "id": 11, "name": "Wireless Earbuds", "sku": "EARB-001", "price": "349", "regular_price": "349",
         "status": "publish", "stock_status": "instock", "stock_quantity": None,
-        "permalink": "http://shop.localtest.me/product/masala-chai-tin/",
+        "permalink": "http://shop.localtest.me/product/wireless-earbuds/",
     }]
     params = route.calls.last.request.url.params
-    assert (params["search"], params["per_page"], params["page"]) == ("chai", "5", "1")
+    assert (params["search"], params["per_page"], params["page"]) == ("earbuds", "5", "1")
 
 
 async def test_per_page_limit_is_enforced_by_schema(mcp_client, store):
@@ -122,7 +122,7 @@ async def test_list_orders_today_uses_store_timezone(mcp_client, store):
     assert params["dates_are_gmt"] == "true"
     assert result["orders"] == [{
         "id": 42, "status": "processing", "date_created": "2026-10-12T00:10:00", "total": "349.00",
-        "currency": "INR", "customer": "Asha Rao", "items": ["1 x Masala Chai Tin"],
+        "currency": "INR", "customer": "Asha Rao", "items": ["1 x Wireless Earbuds"],
     }]
 
 
@@ -152,7 +152,7 @@ async def test_get_order_details(mcp_client, store):
     assert not is_error
     assert result["payment_method"] == "Cash on delivery"
     assert result["customer_city"] == "Bengaluru"
-    assert result["line_items"] == [{"name": "Masala Chai Tin", "sku": "CHAI-001", "quantity": 1, "total": "349.00"}]
+    assert result["line_items"] == [{"name": "Wireless Earbuds", "sku": "EARB-001", "quantity": 1, "total": "349.00"}]
 
 
 async def test_update_order_status(mcp_client, store):

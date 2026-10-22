@@ -67,18 +67,18 @@ woocommerce:
     consumerKey: ""
     consumerSecret: ""
   sampleProducts:
-    - sku: CHAI-001
-      name: Masala Chai Tin
-      price: "349"
-      description: 250g of strong Assam masala chai.
-    - sku: TOTE-001
-      name: Handloom Cotton Tote
-      price: "799"
-      description: Hand-woven cotton tote bag.
-    - sku: DIYA-001
-      name: Brass Diya
+    - sku: EARB-001
+      name: Wireless Earbuds
+      price: "1999"
+      description: Bluetooth 5.3 earbuds with a 24-hour charging case.
+    - sku: PWR-001
+      name: 10000mAh Power Bank
       price: "1299"
-      description: Traditional polished brass oil lamp.
+      description: Slim power bank with USB-C fast charging.
+    - sku: KBD-001
+      name: Mechanical Keyboard
+      price: "3499"
+      description: Compact 75% mechanical keyboard with hot-swappable switches.
 
 bootstrap:
   backoffLimit: 3
