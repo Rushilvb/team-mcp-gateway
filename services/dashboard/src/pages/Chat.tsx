@@ -11,7 +11,7 @@ interface Entry extends ChatMessage {
 
 const SUGGESTIONS = [
   "What orders came in today?",
-  "Create a product called Test Saree priced 499",
+  "Create a product called wireless earbuds priced 1999",
   "List today's orders and convert the total to USD",
   "Summarize today's orders and save it as a note",
 ];
