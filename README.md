@@ -159,7 +159,7 @@ make llm-secret               # creates the gateway-llm Secret and restarts the 
 make chat-check PROMPT="What orders came in today?"   # optional: one prompt via the real API
 ```
 
-Try: "Create a product called wireless earbuds priced 1999", "What orders came in today?",
+Try: "Create a product called USB-C Charging Cable priced 499", "What orders came in today?",
 "List today's orders and convert the total to USD", "Summarize today's orders and save it as a note".
 The model defaults to `gemini-3.6-flash` (`gateway.chat.model` in values). Without a key, Chat says
 "not configured" and everything else works normally.
